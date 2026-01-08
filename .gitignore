@@ -123,15 +123,14 @@ dmypy.json
 .DS_Store
 Thumbs.db
 
-# Project specific
-data/results/*.parquet
-data/results/*.csv
+# Project specific - ignore generated output files
 data/dashboards/*.html
-data/history/*.parquet
 logs/*.log
+
+# Keep CSV results tracked in git (remove this line if you don't want to track them)
+# data/results/*.csv
 
 # Keep empty directories
 !data/results/.gitkeep
 !data/dashboards/.gitkeep
-!data/history/.gitkeep
 !logs/.gitkeep

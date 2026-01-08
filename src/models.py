@@ -94,7 +94,7 @@ class ScreenerConfig(BaseModel):
     )
     min_dte: int = Field(default=30, description="Minimum days to expiration")
     max_dte: int = Field(default=45, description="Maximum days to expiration")
-    min_credit: float = Field(default=0.30, description="Minimum net credit per spread")
+    min_credit: float = Field(default=0.20, description="Minimum net credit per spread")
     max_loss: float = Field(default=500.0, description="Maximum loss per spread")
     min_return_on_risk: float = Field(default=20.0, description="Minimum return on risk percentage")
     target_delta_short: tuple[float, float] = Field(

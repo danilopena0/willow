@@ -37,12 +37,12 @@ def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
         print("\nNo spreads found matching criteria.")
         return
 
-    print("\n" + "=" * 110)
+    print("\n" + "=" * 120)
     print(
         f"{'Ticker':<8} {'Type':<15} {'Strikes':<12} {'Credit':<10} "
-        f"{'ROR %':<8} {'Max Loss':<10} {'DTE':<6} {'Break-Even':<12}"
+        f"{'ROR %':<8} {'Max Loss':<10} {'DTE':<6} {'Dist %':<8} {'Break-Even':<12}"
     )
-    print("=" * 110)
+    print("=" * 120)
 
     for spread in spreads[:max_display]:
         print(
@@ -53,64 +53,64 @@ def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
             f"{spread.return_on_risk:>5.1f}%{'':>3} "
             f"${spread.max_loss:>7.2f}{'':>3} "
             f"{spread.days_to_expiration:>4}{'':>2} "
+            f"{spread.distance_from_price_pct:>5.1f}%{'':>2} "
             f"${spread.break_even:>8.2f}"
         )
 
-    print("=" * 110)
+    print("=" * 120)
 
     if len(spreads) > max_display:
         print(f"\n... and {len(spreads) - max_display} more spreads")
 
 
-def save_results(spreads: list[CreditSpread], timestamp: datetime) -> tuple[str, str]:
+def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
     """
-    Save results to Parquet for fast historical analysis.
+    Save results to CSV.
 
     Args:
         spreads: List of credit spreads to save
         timestamp: Timestamp for the screening run
 
     Returns:
-        Tuple of (daily_file_path, history_file_path)
+        Path to saved CSV file
     """
     if not spreads:
-        return "", ""
+        return ""
 
     # Convert to DataFrame
     records = []
     for spread in spreads:
-        record = spread.model_dump()
-        # Flatten nested objects for storage
-        record["short_strike"] = spread.short_leg.strike
-        record["short_premium"] = spread.short_leg.premium
-        record["short_oi"] = spread.short_leg.open_interest
-        record["long_strike"] = spread.long_leg.strike
-        record["long_premium"] = spread.long_leg.premium
-        record["long_oi"] = spread.long_leg.open_interest
-        # Remove nested dicts
-        del record["short_leg"]
-        del record["long_leg"]
-        records.append(record)
+        records.append({
+            "timestamp": timestamp.isoformat(),
+            "ticker": spread.ticker,
+            "spread_type": spread.spread_type,
+            "expiration": spread.expiration.isoformat(),
+            "days_to_expiration": spread.days_to_expiration,
+            "short_strike": spread.short_leg.strike,
+            "long_strike": spread.long_leg.strike,
+            "net_credit": spread.net_credit,
+            "max_loss": spread.max_loss,
+            "max_profit": spread.max_profit,
+            "return_on_risk": spread.return_on_risk,
+            "break_even": spread.break_even,
+            "width": spread.width,
+            "current_stock_price": spread.current_stock_price,
+            "distance_from_price": spread.distance_from_price,
+            "distance_from_price_pct": round(spread.distance_from_price_pct, 2),
+            "short_premium": spread.short_leg.premium,
+            "short_oi": spread.short_leg.open_interest,
+            "long_premium": spread.long_leg.premium,
+            "long_oi": spread.long_leg.open_interest,
+        })
 
     df = pl.DataFrame(records)
 
-    # Save daily results
+    # Save to CSV
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    daily_filename = RESULTS_DIR / f"{timestamp.strftime('%Y%m%d')}_spreads.parquet"
-    df.write_parquet(str(daily_filename))
+    csv_filename = RESULTS_DIR / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_spreads.csv"
+    df.write_csv(str(csv_filename))
 
-    # Append to master history
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    history_file = HISTORY_DIR / "all_spreads.parquet"
-
-    if history_file.exists():
-        historical = pl.read_parquet(str(history_file))
-        combined = pl.concat([historical, df], how="diagonal")
-        combined.write_parquet(str(history_file))
-    else:
-        df.write_parquet(str(history_file))
-
-    return str(daily_filename), str(history_file)
+    return str(csv_filename)
 
 
 def screen_ticker(
@@ -225,9 +225,9 @@ def run_screener(
         display_results(all_spreads, max_display=10)
 
     # Save results
-    daily_path, history_path = save_results(all_spreads, timestamp)
-    if verbose and daily_path:
-        print(f"Results saved to {daily_path}")
+    csv_path = save_results(all_spreads, timestamp)
+    if verbose and csv_path:
+        print(f"Results saved to {csv_path}")
 
     # Generate visualizations
     dashboard_path = None

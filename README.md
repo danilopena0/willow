@@ -94,7 +94,7 @@ python -m src.screener --visualize --alert --slack
 | `--min-ror` | Minimum return on risk (%) | 20 |
 | `--min-dte` | Minimum days to expiration | 30 |
 | `--max-dte` | Maximum days to expiration | 45 |
-| `--min-credit` | Minimum net credit ($) | 0.30 |
+| `--min-credit` | Minimum net credit ($) | 0.20 |
 | `--max-loss` | Maximum loss per spread ($) | 500 |
 | `--spread-width` | Strike width ($) | 5 |
 | `--min-oi` | Minimum open interest | 50 |

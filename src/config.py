@@ -31,7 +31,7 @@ def load_config() -> ScreenerConfig:
         tickers=tickers or ScreenerConfig.model_fields["tickers"].default_factory(),
         min_dte=int(os.getenv("SCREENER_MIN_DTE", "30")),
         max_dte=int(os.getenv("SCREENER_MAX_DTE", "45")),
-        min_credit=float(os.getenv("SCREENER_MIN_CREDIT", "0.30")),
+        min_credit=float(os.getenv("SCREENER_MIN_CREDIT", "0.20")),
         max_loss=float(os.getenv("SCREENER_MAX_LOSS", "500")),
         min_return_on_risk=float(os.getenv("SCREENER_MIN_ROR", "20")),
         min_open_interest=int(os.getenv("SCREENER_MIN_OI", "50")),
