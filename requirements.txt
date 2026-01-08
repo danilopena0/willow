@@ -1,0 +1,24 @@
+# Core dependencies
+polars>=0.20.0
+yfinance>=0.2.36
+pydantic>=2.6.0
+altair>=5.2.0
+vl-convert-python>=1.1.0    # For saving charts as HTML/PNG
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Testing
+pytest>=8.0.0
+pytest-cov>=4.1.0
+
+# Development (optional)
+# ruff>=0.1.0
+# mypy>=1.8.0
+
+# Phase 2 - Advanced Analytics & AI (uncomment when needed)
+# instructor>=1.0.0          # Structured LLM outputs from Claude
+# duckdb>=0.10.0             # Fast SQL analytics on spread history
+# ta-lib>=0.4.28             # Technical analysis indicators
+# prophet>=1.1.5             # Time series forecasting
+# pydantic-ai>=0.0.1         # AI framework from Pydantic team
+# anthropic>=0.18.0          # For Instructor integration
