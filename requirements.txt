@@ -7,6 +7,7 @@ altair>=5.2.0
 vl-convert-python>=1.1.0    # For saving charts as HTML/PNG
 python-dotenv>=1.0.0
 requests>=2.31.0
+xlsxwriter>=3.1.0           # Excel output with formatting
 
 # Testing
 pytest>=8.0.0

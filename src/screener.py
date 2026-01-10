@@ -65,52 +65,139 @@ def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
 
 def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
     """
-    Save results to CSV.
+    Save results to Excel with conditional formatting.
 
     Args:
         spreads: List of credit spreads to save
         timestamp: Timestamp for the screening run
 
     Returns:
-        Path to saved CSV file
+        Path to saved Excel file
     """
+    import xlsxwriter
+
     if not spreads:
         return ""
 
-    # Convert to DataFrame
-    records = []
-    for spread in spreads:
-        records.append({
-            "timestamp": timestamp.isoformat(),
-            "ticker": spread.ticker,
-            "spread_type": spread.spread_type,
-            "expiration": spread.expiration.isoformat(),
-            "days_to_expiration": spread.days_to_expiration,
-            "short_strike": spread.short_leg.strike,
-            "long_strike": spread.long_leg.strike,
-            "net_credit": spread.net_credit,
-            "max_loss": spread.max_loss,
-            "max_profit": spread.max_profit,
-            "return_on_risk": spread.return_on_risk,
-            "break_even": spread.break_even,
-            "width": spread.width,
-            "current_stock_price": spread.current_stock_price,
-            "distance_from_price": spread.distance_from_price,
-            "distance_from_price_pct": round(spread.distance_from_price_pct, 2),
-            "short_premium": spread.short_leg.premium,
-            "short_oi": spread.short_leg.open_interest,
-            "long_premium": spread.long_leg.premium,
-            "long_oi": spread.long_leg.open_interest,
-        })
-
-    df = pl.DataFrame(records)
-
-    # Save to CSV
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    csv_filename = RESULTS_DIR / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_spreads.csv"
-    df.write_csv(str(csv_filename))
+    xlsx_filename = RESULTS_DIR / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_spreads.xlsx"
 
-    return str(csv_filename)
+    workbook = xlsxwriter.Workbook(str(xlsx_filename))
+    worksheet = workbook.add_worksheet("Spreads")
+
+    # Define formats
+    header_fmt = workbook.add_format({
+        "bold": True,
+        "bg_color": "#4472C4",
+        "font_color": "white",
+        "border": 1,
+        "align": "center",
+    })
+    money_fmt = workbook.add_format({"num_format": "$#,##0.00", "border": 1})
+    pct_fmt = workbook.add_format({"num_format": "0.0%", "border": 1})
+    num_fmt = workbook.add_format({"num_format": "#,##0", "border": 1})
+    text_fmt = workbook.add_format({"border": 1})
+    date_fmt = workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1})
+
+    # Headers
+    headers = [
+        "Ticker", "Type", "Expiration", "DTE", "Short Strike", "Long Strike",
+        "Credit", "Max Loss", "Max Profit", "ROR %", "Break-Even",
+        "Stock Price", "Distance %", "Short OI", "Long OI"
+    ]
+
+    for col, header in enumerate(headers):
+        worksheet.write(0, col, header, header_fmt)
+
+    # Column widths (sized to fit headers)
+    worksheet.set_column(0, 0, 10)   # Ticker
+    worksheet.set_column(1, 1, 12)   # Type
+    worksheet.set_column(2, 2, 12)   # Expiration
+    worksheet.set_column(3, 3, 6)    # DTE
+    worksheet.set_column(4, 4, 13)   # Short Strike
+    worksheet.set_column(5, 5, 13)   # Long Strike
+    worksheet.set_column(6, 6, 10)   # Credit
+    worksheet.set_column(7, 7, 11)   # Max Loss
+    worksheet.set_column(8, 8, 11)   # Max Profit
+    worksheet.set_column(9, 9, 9)    # ROR %
+    worksheet.set_column(10, 10, 12) # Break-Even
+    worksheet.set_column(11, 11, 12) # Stock Price
+    worksheet.set_column(12, 12, 12) # Distance %
+    worksheet.set_column(13, 13, 10) # Short OI
+    worksheet.set_column(14, 14, 10) # Long OI
+
+    # Write data
+    for row, spread in enumerate(spreads, start=1):
+        worksheet.write(row, 0, spread.ticker, text_fmt)
+        worksheet.write(row, 1, spread.spread_type.replace("_", " ").title(), text_fmt)
+        worksheet.write(row, 2, spread.expiration, date_fmt)
+        worksheet.write(row, 3, spread.days_to_expiration, num_fmt)
+        worksheet.write(row, 4, spread.short_leg.strike, money_fmt)
+        worksheet.write(row, 5, spread.long_leg.strike, money_fmt)
+        worksheet.write(row, 6, spread.net_credit, money_fmt)
+        worksheet.write(row, 7, spread.max_loss, money_fmt)
+        worksheet.write(row, 8, spread.max_profit, money_fmt)
+        worksheet.write(row, 9, spread.return_on_risk / 100, pct_fmt)
+        worksheet.write(row, 10, spread.break_even, money_fmt)
+        worksheet.write(row, 11, spread.current_stock_price, money_fmt)
+        worksheet.write(row, 12, spread.distance_from_price_pct / 100, pct_fmt)
+        worksheet.write(row, 13, spread.short_leg.open_interest, num_fmt)
+        worksheet.write(row, 14, spread.long_leg.open_interest, num_fmt)
+
+    # Conditional formatting with gradients
+    last_row = len(spreads)
+
+    # ROR % (column J, index 9) - Red to Green gradient (higher is better)
+    worksheet.conditional_format(1, 9, last_row, 9, {
+        "type": "3_color_scale",
+        "min_type": "num",
+        "mid_type": "num",
+        "max_type": "num",
+        "min_value": 0.15,
+        "mid_value": 0.25,
+        "max_value": 0.40,
+        "min_color": "#F8696B",  # Red
+        "mid_color": "#FFEB84",  # Yellow
+        "max_color": "#63BE7B",  # Green
+    })
+
+    # DTE (column D, index 3) - Red to Green gradient (more time = better)
+    worksheet.conditional_format(1, 3, last_row, 3, {
+        "type": "3_color_scale",
+        "min_type": "num",
+        "mid_type": "num",
+        "max_type": "num",
+        "min_value": 14,
+        "mid_value": 37,
+        "max_value": 60,
+        "min_color": "#F8696B",  # Red (less time)
+        "mid_color": "#FFFFFF",  # White (middle)
+        "max_color": "#63BE7B",  # Green (more time)
+    })
+
+    # Distance % (column M, index 12) - Red to Blue gradient (higher is safer)
+    worksheet.conditional_format(1, 12, last_row, 12, {
+        "type": "3_color_scale",
+        "min_type": "num",
+        "mid_type": "num",
+        "max_type": "num",
+        "min_value": 0.01,
+        "mid_value": 0.05,
+        "max_value": 0.10,
+        "min_color": "#F8696B",  # Red (too close)
+        "mid_color": "#FFEB84",  # Yellow
+        "max_color": "#5B9BD5",  # Blue (safe)
+    })
+
+    # Freeze top row
+    worksheet.freeze_panes(1, 0)
+
+    # Auto-filter
+    worksheet.autofilter(0, 0, last_row, len(headers) - 1)
+
+    workbook.close()
+
+    return str(xlsx_filename)
 
 
 def screen_ticker(
@@ -225,9 +312,9 @@ def run_screener(
         display_results(all_spreads, max_display=10)
 
     # Save results
-    csv_path = save_results(all_spreads, timestamp)
-    if verbose and csv_path:
-        print(f"Results saved to {csv_path}")
+    xlsx_path = save_results(all_spreads, timestamp)
+    if verbose and xlsx_path:
+        print(f"Results saved to {xlsx_path}")
 
     # Generate visualizations
     dashboard_path = None
