@@ -124,13 +124,8 @@ dmypy.json
 Thumbs.db
 
 # Project specific - ignore generated output files
-data/dashboards/*.html
+data/
 logs/*.log
 
-# Keep CSV results tracked in git (remove this line if you don't want to track them)
-# data/results/*.csv
-
 # Keep empty directories
-!data/results/.gitkeep
-!data/dashboards/.gitkeep
 !logs/.gitkeep
