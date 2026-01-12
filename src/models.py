@@ -106,7 +106,6 @@ class ScreenerConfig(BaseModel):
     alert_threshold_ror: float = Field(default=30.0, description="Alert if ROR exceeds this")
 
     # Alert settings
-    enable_email_alerts: bool = False
     enable_slack_alerts: bool = False
 
     @field_validator("tickers", mode="before")
@@ -130,19 +129,8 @@ class ScreenerConfig(BaseModel):
 class AlertConfig(BaseModel):
     """Configuration for alert system."""
 
-    # Gmail SMTP settings
-    gmail_address: str | None = None
-    gmail_app_password: str | None = None
-    alert_email: str | None = None
-
     # Slack webhook settings
     slack_webhook_url: str | None = None
-
-    @computed_field
-    @property
-    def email_configured(self) -> bool:
-        """Check if email alerts are properly configured."""
-        return all([self.gmail_address, self.gmail_app_password, self.alert_email])
 
     @computed_field
     @property

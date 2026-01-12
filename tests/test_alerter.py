@@ -6,9 +6,7 @@ from unittest.mock import patch, MagicMock
 
 from src.models import OptionLeg, CreditSpread, AlertConfig
 from src.alerter import (
-    create_email_body,
     create_slack_blocks,
-    send_email_alert,
     send_slack_alert,
     send_alerts,
     AlertError,
@@ -66,58 +64,11 @@ def sample_spreads() -> list[CreditSpread]:
 
 
 @pytest.fixture
-def email_config() -> AlertConfig:
-    """Create sample email alert config."""
-    return AlertConfig(
-        gmail_address="test@gmail.com",
-        gmail_app_password="testpassword",
-        alert_email="recipient@example.com",
-    )
-
-
-@pytest.fixture
 def slack_config() -> AlertConfig:
     """Create sample Slack alert config."""
     return AlertConfig(
         slack_webhook_url="https://hooks.slack.com/services/TEST/WEBHOOK",
     )
-
-
-class TestCreateEmailBody:
-    """Tests for email body creation."""
-
-    def test_creates_html_body(self, sample_spreads):
-        """Test that HTML body is created."""
-        body = create_email_body(sample_spreads)
-
-        assert "<html>" in body
-        assert "<table>" in body
-        assert "Credit Spread Opportunities" in body
-
-    def test_includes_spread_data(self, sample_spreads):
-        """Test that spread data is included in body."""
-        body = create_email_body(sample_spreads)
-
-        assert "AAPL" in body
-        assert "MSFT" in body
-        assert "Bull Put" in body
-        assert "Bear Call" in body
-
-    def test_highlights_high_ror(self, sample_spreads):
-        """Test that high ROR spreads are highlighted."""
-        body = create_email_body(sample_spreads)
-
-        # High ROR spread should have highlight class
-        assert "high-ror" in body
-
-    def test_limits_to_ten_spreads(self, sample_spreads):
-        """Test that body limits to 10 spreads."""
-        # Create more than 10 spreads
-        many_spreads = sample_spreads * 6  # 12 spreads
-        body = create_email_body(many_spreads)
-
-        # Should only show 10
-        assert body.count("<tr") <= 12  # 10 data rows + header + closing
 
 
 class TestCreateSlackBlocks:
@@ -161,44 +112,24 @@ class TestCreateSlackBlocks:
         context_blocks = [b for b in blocks if b.get("type") == "context"]
         assert len(context_blocks) > 0
 
+    def test_includes_distance_percent(self, sample_spreads):
+        """Test that distance percentage is included."""
+        blocks = create_slack_blocks(sample_spreads)
 
-class TestSendEmailAlert:
-    """Tests for email sending."""
+        # Find spread sections and check for Dist:
+        spread_sections = [
+            b for b in blocks
+            if b.get("type") == "section" and "Strikes:" in str(b.get("text", {}))
+        ]
+        assert any("Dist:" in str(s) for s in spread_sections)
 
-    def test_raises_error_when_not_configured(self, sample_spreads):
-        """Test that error is raised when email not configured."""
-        empty_config = AlertConfig()
+    def test_color_coded_ror(self, sample_spreads):
+        """Test that ROR is color coded with emojis."""
+        blocks = create_slack_blocks(sample_spreads)
 
-        with pytest.raises(AlertError) as excinfo:
-            send_email_alert(sample_spreads, empty_config)
-
-        assert "not configured" in str(excinfo.value).lower()
-
-    @patch("src.alerter.smtplib.SMTP_SSL")
-    def test_sends_email_when_configured(self, mock_smtp, sample_spreads, email_config):
-        """Test that email is sent when properly configured."""
-        mock_server = MagicMock()
-        mock_smtp.return_value.__enter__.return_value = mock_server
-
-        send_email_alert(sample_spreads, email_config)
-
-        mock_server.login.assert_called_once()
-        mock_server.send_message.assert_called_once()
-
-    @patch("src.alerter.smtplib.SMTP_SSL")
-    def test_includes_subject(self, mock_smtp, sample_spreads, email_config):
-        """Test that custom subject is used."""
-        mock_server = MagicMock()
-        mock_smtp.return_value.__enter__.return_value = mock_server
-
-        send_email_alert(
-            sample_spreads, email_config, subject="Custom Subject"
-        )
-
-        # Check that send_message was called with message containing subject
-        call_args = mock_server.send_message.call_args
-        msg = call_args[0][0]
-        assert msg["Subject"] == "Custom Subject"
+        block_text = str(blocks)
+        # Should have color emojis based on ROR thresholds
+        assert any(emoji in block_text for emoji in ["🟢", "🟡", "🔵"])
 
 
 class TestSendSlackAlert:
@@ -238,53 +169,49 @@ class TestSendAlerts:
     """Tests for combined alert sending."""
 
     @patch("src.alerter.load_alert_config")
-    @patch("src.alerter.send_email_alert")
     @patch("src.alerter.send_slack_alert")
-    def test_sends_both_alerts(
-        self, mock_slack, mock_email, mock_config, sample_spreads
-    ):
-        """Test that both alert types can be sent."""
+    def test_sends_slack_alert(self, mock_slack, mock_config, sample_spreads):
+        """Test that Slack alert is sent when enabled."""
         mock_config.return_value = AlertConfig(
-            gmail_address="test@gmail.com",
-            gmail_app_password="pass",
-            alert_email="to@example.com",
             slack_webhook_url="https://hooks.slack.com/test",
         )
 
-        results = send_alerts(
-            sample_spreads, enable_email=True, enable_slack=True
-        )
+        results = send_alerts(sample_spreads, enable_slack=True)
 
-        mock_email.assert_called_once()
         mock_slack.assert_called_once()
+        assert results["slack"] is True
 
     @patch("src.alerter.load_alert_config")
     def test_handles_unconfigured_gracefully(self, mock_config, sample_spreads):
         """Test that unconfigured alerts don't raise errors."""
         mock_config.return_value = AlertConfig()  # Nothing configured
 
-        results = send_alerts(sample_spreads, enable_email=True, enable_slack=True)
+        results = send_alerts(sample_spreads, enable_slack=True)
 
-        assert results["email"] is False
         assert results["slack"] is False
 
     @patch("src.alerter.load_alert_config")
-    @patch("src.alerter.send_email_alert")
-    def test_continues_on_failure(self, mock_email, mock_config, sample_spreads):
-        """Test that one failure doesn't stop other alerts."""
+    @patch("src.alerter.send_slack_alert")
+    def test_handles_failure_gracefully(self, mock_slack, mock_config, sample_spreads):
+        """Test that failures are handled without raising."""
         mock_config.return_value = AlertConfig(
-            gmail_address="test@gmail.com",
-            gmail_app_password="pass",
-            alert_email="to@example.com",
             slack_webhook_url="https://hooks.slack.com/test",
         )
-        mock_email.side_effect = AlertError("Email failed")
+        mock_slack.side_effect = AlertError("Slack failed")
+
+        results = send_alerts(sample_spreads, enable_slack=True)
+
+        assert results["slack"] is False
+
+    @patch("src.alerter.load_alert_config")
+    def test_respects_enable_flag(self, mock_config, sample_spreads):
+        """Test that alerts are not sent when enable_slack=False."""
+        mock_config.return_value = AlertConfig(
+            slack_webhook_url="https://hooks.slack.com/test",
+        )
 
         with patch("src.alerter.send_slack_alert") as mock_slack:
-            results = send_alerts(
-                sample_spreads, enable_email=True, enable_slack=True
-            )
+            results = send_alerts(sample_spreads, enable_slack=False)
 
-            # Slack should still be attempted
-            mock_slack.assert_called_once()
-            assert results["email"] is False
+            mock_slack.assert_not_called()
+            assert results["slack"] is False

@@ -330,7 +330,7 @@ def run_screener(
 
         table_fig = create_top_spreads_table(all_spreads)
         table_path = DASHBOARDS_DIR / f"top_spreads_{timestamp.strftime('%Y%m%d_%H%M%S')}.html"
-        table_fig.write_html(str(table_path))
+        table_fig.save(str(table_path))
 
         if verbose:
             print(f"   Table: {table_path}")
@@ -347,17 +347,14 @@ def run_screener(
 
             results = send_alerts(
                 high_quality,
-                enable_email=config.enable_email_alerts,
                 enable_slack=config.enable_slack_alerts,
                 dashboard_path=dashboard_path,
             )
 
             if verbose:
-                if results["email"]:
-                    print("   Email sent successfully")
                 if results["slack"]:
                     print("   Slack message sent successfully")
-                if not any(results.values()):
+                else:
                     print("   No alerts configured or sent")
 
     return ScreenerResult(
@@ -454,12 +451,6 @@ Examples:
     )
 
     parser.add_argument(
-        "--email",
-        action="store_true",
-        help="Enable email alerts (requires GMAIL_* env vars)",
-    )
-
-    parser.add_argument(
         "--slack",
         action="store_true",
         help="Enable Slack alerts (requires SLACK_WEBHOOK_URL env var)",
@@ -487,12 +478,9 @@ def main() -> int:
 
     # Test alerts mode
     if args.test_alerts:
-        from src.alerter import test_email_connection, test_slack_connection
+        from src.alerter import test_slack_connection
 
-        print("Testing alert configuration...")
-        print("\nEmail:")
-        test_email_connection()
-        print("\nSlack:")
+        print("Testing Slack configuration...")
         test_slack_connection()
         return 0
 
@@ -518,8 +506,6 @@ def main() -> int:
         config.min_open_interest = args.min_oi
 
     # Alert settings
-    if args.email:
-        config.enable_email_alerts = True
     if args.slack:
         config.enable_slack_alerts = True
 

@@ -1,6 +1,6 @@
 # Willow - Options Credit Spread Screener
 
-A Python command-line tool for screening options credit spread opportunities across a watchlist of securities. Features interactive Altair visualizations, configurable alerts via email/Slack, and historical tracking.
+A Python command-line tool for screening options credit spread opportunities across a watchlist of securities. Features interactive Altair visualizations, configurable Slack alerts, and historical tracking.
 
 ## Features
 
@@ -10,8 +10,8 @@ A Python command-line tool for screening options credit spread opportunities acr
 - Type-safe models with **Pydantic**
 - Interactive dashboards with **Altair**
 - Configurable filtering (delta, DTE, return on risk, liquidity)
-- Alert system (Gmail SMTP, Slack webhooks)
-- Historical tracking in Parquet format
+- Slack webhook alerts
+- Excel output with conditional formatting
 - Automated daily execution via cron
 
 ## Installation
@@ -65,7 +65,7 @@ python -m src.screener --visualize
 # Dashboard saved to data/dashboards/dashboard_YYYYMMDD_HHMMSS.html
 ```
 
-### Send Alerts
+### Send Slack Alerts
 
 ```bash
 # Test alert configuration
@@ -73,7 +73,6 @@ python -m src.screener --test-alerts
 
 # Send alerts for high-quality spreads
 python -m src.screener --alert --slack
-python -m src.screener --alert --email
 ```
 
 ### Full Daily Run
@@ -100,7 +99,6 @@ python -m src.screener --visualize --alert --slack
 | `--min-oi` | Minimum open interest | 50 |
 | `--visualize`, `-v` | Generate Altair charts | false |
 | `--alert`, `-a` | Send alerts | false |
-| `--email` | Enable email alerts | false |
 | `--slack` | Enable Slack alerts | false |
 | `--quiet`, `-q` | Suppress output | false |
 | `--test-alerts` | Test alert config | - |
@@ -118,30 +116,18 @@ SCREENER_MIN_DTE=30
 SCREENER_MAX_DTE=45
 SCREENER_MIN_ROR=20
 
-# Email alerts (Gmail)
-ENABLE_EMAIL_ALERTS=true
-GMAIL_ADDRESS=your-email@gmail.com
-GMAIL_APP_PASSWORD=your-app-password
-ALERT_EMAIL=recipient@example.com
-
 # Slack alerts
 ENABLE_SLACK_ALERTS=true
 SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 ```
 
-### Gmail Setup
-
-1. Enable 2-Factor Authentication on your Google account
-2. Go to [App Passwords](https://myaccount.google.com/apppasswords)
-3. Generate a new app password for "Mail"
-4. Use this password in `GMAIL_APP_PASSWORD`
-
 ### Slack Setup
 
-1. Create a [Slack App](https://api.slack.com/apps)
-2. Add "Incoming Webhooks" feature
-3. Create a webhook for your channel
-4. Copy the webhook URL to `SLACK_WEBHOOK_URL`
+1. Go to [Slack Apps](https://api.slack.com/apps)
+2. Create a new app (From scratch)
+3. Add "Incoming Webhooks" feature
+4. Activate webhooks and create one for your channel
+5. Copy the webhook URL to `SLACK_WEBHOOK_URL` in your `.env`
 
 ## Project Structure
 
@@ -155,14 +141,14 @@ willow/
 │   ├── options_fetcher.py   # yfinance wrapper
 │   ├── spread_calculator.py # Spread screening logic
 │   ├── visualizer.py        # Altair charts
-│   └── alerter.py           # Email/Slack notifications
+│   └── alerter.py           # Slack notifications
 ├── tests/
 │   ├── test_models.py
 │   ├── test_calculator.py
 │   ├── test_visualizer.py
 │   └── test_alerter.py
 ├── data/
-│   ├── results/             # Daily Parquet files
+│   ├── results/             # Daily Excel files
 │   ├── dashboards/          # HTML visualizations
 │   └── history/             # Historical tracking
 ├── logs/                    # Execution logs
@@ -217,7 +203,7 @@ crontab -e
 3. Set trigger: Daily, weekdays, 9:35 AM
 4. Action: Start a program
 5. Program: `python`
-6. Arguments: `-m src.screener --visualize --alert`
+6. Arguments: `-m src.screener --visualize --alert --slack`
 7. Start in: `C:\path\to\willow`
 
 ## Testing

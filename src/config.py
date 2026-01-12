@@ -37,7 +37,6 @@ def load_config() -> ScreenerConfig:
         min_open_interest=int(os.getenv("SCREENER_MIN_OI", "50")),
         spread_width=int(os.getenv("SCREENER_SPREAD_WIDTH", "5")),
         alert_threshold_ror=float(os.getenv("SCREENER_ALERT_THRESHOLD", "30")),
-        enable_email_alerts=os.getenv("ENABLE_EMAIL_ALERTS", "false").lower() == "true",
         enable_slack_alerts=os.getenv("ENABLE_SLACK_ALERTS", "false").lower() == "true",
     )
 
@@ -45,9 +44,6 @@ def load_config() -> ScreenerConfig:
 def load_alert_config() -> AlertConfig:
     """Load alert configuration from environment variables."""
     return AlertConfig(
-        gmail_address=os.getenv("GMAIL_ADDRESS"),
-        gmail_app_password=os.getenv("GMAIL_APP_PASSWORD"),
-        alert_email=os.getenv("ALERT_EMAIL"),
         slack_webhook_url=os.getenv("SLACK_WEBHOOK_URL"),
     )
 
