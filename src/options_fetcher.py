@@ -1,12 +1,58 @@
 """yfinance wrapper for fetching options chain data."""
 
+import math
 import time
 from datetime import datetime, date
 from functools import lru_cache
 from typing import NamedTuple
 
+import numpy as np
 import polars as pl
 import yfinance as yf
+from scipy.stats import norm
+
+
+# Default risk-free rate (approximate current US Treasury rate)
+RISK_FREE_RATE = 0.045
+
+
+def calculate_bs_delta(
+    stock_price: float,
+    strike: float,
+    time_to_expiry: float,
+    volatility: float,
+    risk_free_rate: float = RISK_FREE_RATE,
+    option_type: str = "call",
+) -> float:
+    """
+    Calculate option delta using Black-Scholes model.
+
+    Args:
+        stock_price: Current stock price
+        strike: Option strike price
+        time_to_expiry: Time to expiration in years
+        volatility: Implied volatility (as decimal, e.g., 0.25 for 25%)
+        risk_free_rate: Risk-free interest rate (default 4.5%)
+        option_type: "call" or "put"
+
+    Returns:
+        Delta value (0 to 1 for calls, -1 to 0 for puts)
+    """
+    if time_to_expiry <= 0 or volatility <= 0 or stock_price <= 0 or strike <= 0:
+        return 0.0
+
+    try:
+        d1 = (
+            math.log(stock_price / strike)
+            + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry
+        ) / (volatility * math.sqrt(time_to_expiry))
+
+        if option_type == "call":
+            return norm.cdf(d1)
+        else:  # put
+            return norm.cdf(d1) - 1
+    except (ValueError, ZeroDivisionError):
+        return 0.0
 
 
 class OptionsChain(NamedTuple):
@@ -109,14 +155,16 @@ class OptionsFetcher:
         info = stock.info
         price = info.get("regularMarketPrice") or info.get("currentPrice", 0.0)
 
+        # Calculate days to expiry
+        exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+        days_to_expiry = (exp_date - datetime.now().date()).days
+
         # Fetch options chain
         chain = stock.option_chain(expiration)
 
-        # Convert to Polars DataFrames with standardized column names
-        calls_df = self._convert_options_df(chain.calls, "call")
-        puts_df = self._convert_options_df(chain.puts, "put")
-
-        exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+        # Convert to Polars DataFrames with standardized column names and calculated delta
+        calls_df = self._convert_options_df(chain.calls, "call", price, days_to_expiry)
+        puts_df = self._convert_options_df(chain.puts, "put", price, days_to_expiry)
 
         return OptionsChain(
             calls=calls_df,
@@ -125,16 +173,25 @@ class OptionsFetcher:
             stock_price=price,
         )
 
-    def _convert_options_df(self, pandas_df, option_type: str) -> pl.DataFrame:
+    def _convert_options_df(
+        self,
+        pandas_df,
+        option_type: str,
+        stock_price: float,
+        days_to_expiry: int,
+    ) -> pl.DataFrame:
         """
         Convert pandas options DataFrame to Polars with standardized columns.
+        Calculates Black-Scholes delta if not provided by yfinance.
 
         Args:
             pandas_df: pandas DataFrame from yfinance
             option_type: "call" or "put"
+            stock_price: Current stock price for delta calculation
+            days_to_expiry: Days to expiration for delta calculation
 
         Returns:
-            Polars DataFrame with standardized columns
+            Polars DataFrame with standardized columns including calculated delta
         """
         if pandas_df.empty:
             return pl.DataFrame()
@@ -156,19 +213,6 @@ class OptionsFetcher:
             if old_name in df.columns:
                 df = df.rename({old_name: new_name})
 
-        # Ensure required columns exist with defaults
-        if "delta" not in df.columns:
-            df = df.with_columns(pl.lit(None).alias("delta").cast(pl.Float64))
-
-        if "gamma" not in df.columns:
-            df = df.with_columns(pl.lit(None).alias("gamma").cast(pl.Float64))
-
-        if "theta" not in df.columns:
-            df = df.with_columns(pl.lit(None).alias("theta").cast(pl.Float64))
-
-        if "vega" not in df.columns:
-            df = df.with_columns(pl.lit(None).alias("vega").cast(pl.Float64))
-
         # Add option type column
         df = df.with_columns(pl.lit(option_type).alias("option_type"))
 
@@ -176,6 +220,31 @@ class OptionsFetcher:
         df = df.with_columns(
             ((pl.col("bid") + pl.col("ask")) / 2).alias("premium")
         )
+
+        # Calculate Black-Scholes delta if not provided
+        time_to_expiry = days_to_expiry / 365.0
+
+        if "delta" not in df.columns or df.select(pl.col("delta").is_null().all()).item():
+            # Calculate delta for each row using Black-Scholes
+            deltas = []
+            for row in df.iter_rows(named=True):
+                iv = row.get("implied_volatility", 0) or 0
+                strike = row.get("strike", 0) or 0
+
+                if iv > 0 and strike > 0 and stock_price > 0:
+                    delta = calculate_bs_delta(
+                        stock_price=stock_price,
+                        strike=strike,
+                        time_to_expiry=time_to_expiry,
+                        volatility=iv,
+                        option_type=option_type,
+                    )
+                else:
+                    delta = None
+
+                deltas.append(delta)
+
+            df = df.with_columns(pl.Series("delta", deltas).cast(pl.Float64))
 
         return df
 

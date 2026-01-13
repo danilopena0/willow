@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(python:*)",
+      "Bash(/mnt/c/Users/ukule/PycharmProjects/willow/venv/Scripts/python.exe:*)"
     ]
   }
 }

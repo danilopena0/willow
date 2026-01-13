@@ -8,6 +8,8 @@ vl-convert-python>=1.1.0    # For saving charts as HTML/PNG
 python-dotenv>=1.0.0
 requests>=2.31.0
 xlsxwriter>=3.1.0           # Excel output with formatting
+scipy>=1.11.0               # Black-Scholes delta calculation
+numpy>=1.24.0               # Numerical operations
 
 # Testing
 pytest>=8.0.0
