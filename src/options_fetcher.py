@@ -245,6 +245,120 @@ class OptionsFetcher:
         history = self.get_price_history(ticker, period=history_period)
         return TickerData(price=price, price_history=history)
 
+    def get_next_earnings_date(self, ticker: str) -> date | None:
+        """
+        Get the next earnings date for a ticker.
+
+        Args:
+            ticker: Stock ticker symbol
+
+        Returns:
+            Next earnings date, or None if not available (including ETFs)
+        """
+        import io
+        import sys
+        import logging
+
+        # Suppress yfinance HTTP error logging temporarily
+        yf_logger = logging.getLogger('yfinance')
+        original_level = yf_logger.level
+        yf_logger.setLevel(logging.CRITICAL)
+
+        # Capture stdout/stderr to suppress HTTP error messages from urllib
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = io.StringIO()
+        sys.stderr = io.StringIO()
+
+        try:
+            stock = self._get_ticker(ticker)
+
+            try:
+                calendar = stock.calendar
+            except Exception:
+                # ETFs and some tickers don't have calendar data - this is expected
+                return None
+
+            if calendar is None:
+                return None
+
+            # Handle empty DataFrame
+            if hasattr(calendar, 'empty') and calendar.empty:
+                return None
+
+            # yfinance returns calendar as DataFrame with 'Earnings Date' row
+            # or as dict with 'Earnings Date' key depending on version
+            if isinstance(calendar, dict):
+                earnings = calendar.get("Earnings Date")
+                if not earnings:
+                    return None
+
+                # Can be a list of dates or single date
+                if isinstance(earnings, list) and len(earnings) > 0:
+                    first_date = earnings[0]
+                    if hasattr(first_date, 'date'):
+                        return first_date.date()
+                    elif isinstance(first_date, date):
+                        return first_date
+                    else:
+                        # Try to parse string
+                        return datetime.strptime(str(first_date), "%Y-%m-%d").date()
+                elif hasattr(earnings, 'date'):
+                    return earnings.date()
+                elif isinstance(earnings, date):
+                    return earnings
+
+            else:
+                # DataFrame format (older yfinance versions)
+                if "Earnings Date" in calendar.index:
+                    earnings_val = calendar.loc["Earnings Date"].iloc[0]
+                    if hasattr(earnings_val, 'date'):
+                        return earnings_val.date()
+                    elif isinstance(earnings_val, date):
+                        return earnings_val
+                    elif earnings_val is not None:
+                        return datetime.strptime(str(earnings_val), "%Y-%m-%d").date()
+
+            return None
+
+        except AttributeError:
+            # Calendar structure different than expected
+            return None
+        except KeyError:
+            # Earnings Date key not found
+            return None
+        except ValueError:
+            # Date parsing failed
+            return None
+        except Exception:
+            # Catch-all for unexpected errors - silent for ETFs etc
+            return None
+        finally:
+            # Restore stdout, stderr and logger level
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+            yf_logger.setLevel(original_level)
+
+    def has_earnings_soon(self, ticker: str, buffer_days: int = 7) -> bool:
+        """
+        Check if a ticker has earnings within the specified buffer period.
+
+        Args:
+            ticker: Stock ticker symbol
+            buffer_days: Number of days to check ahead
+
+        Returns:
+            True if earnings are within buffer_days
+        """
+        earnings_date = self.get_next_earnings_date(ticker)
+        if earnings_date is None:
+            return False
+
+        today = datetime.now().date()
+        days_until_earnings = (earnings_date - today).days
+
+        return 0 <= days_until_earnings <= buffer_days
+
     def clear_cache(self) -> None:
         """Clear the ticker cache."""
         self._ticker_cache.clear()

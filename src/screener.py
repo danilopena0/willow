@@ -1,18 +1,13 @@
 """Main screener script for options credit spread screening."""
 
 import argparse
-import os
 import sys
 from datetime import datetime
-from pathlib import Path
-
-import polars as pl
 
 from src.models import CreditSpread, ScreenerConfig, ScreenerResult
 from src.config import (
     load_config,
     RESULTS_DIR,
-    HISTORY_DIR,
     DASHBOARDS_DIR,
 )
 from src.options_fetcher import OptionsFetcher
@@ -37,27 +32,29 @@ def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
         print("\nNo spreads found matching criteria.")
         return
 
-    print("\n" + "=" * 120)
+    print("\n" + "=" * 140)
     print(
-        f"{'Ticker':<8} {'Type':<15} {'Strikes':<12} {'Credit':<10} "
-        f"{'ROR %':<8} {'Max Loss':<10} {'DTE':<6} {'Dist %':<8} {'Break-Even':<12}"
+        f"{'Ticker':<8} {'Type':<12} {'Strikes':<12} {'Width':<6} {'Credit':<8} "
+        f"{'ROR %':<7} {'Ann %':<8} {'POP %':<6} {'DTE':<5} {'Dist %':<7} {'Max Loss':<10}"
     )
-    print("=" * 120)
+    print("=" * 140)
 
     for spread in spreads[:max_display]:
         print(
             f"{spread.ticker:<8} "
-            f"{spread.spread_type.replace('_', ' ').title():<15} "
-            f"${spread.short_leg.strike:.0f}/${spread.long_leg.strike:.0f}{'':>4} "
-            f"${spread.net_credit:>6.2f}{'':>4} "
-            f"{spread.return_on_risk:>5.1f}%{'':>3} "
-            f"${spread.max_loss:>7.2f}{'':>3} "
-            f"{spread.days_to_expiration:>4}{'':>2} "
-            f"{spread.distance_from_price_pct:>5.1f}%{'':>2} "
-            f"${spread.break_even:>8.2f}"
+            f"{spread.spread_type.replace('_', ' ').title():<12} "
+            f"${spread.short_leg.strike:.0f}/${spread.long_leg.strike:.0f}{'':>3} "
+            f"${spread.width:<5.0f} "
+            f"${spread.net_credit:<6.2f} "
+            f"{spread.return_on_risk:>5.1f}%  "
+            f"{spread.annualized_return:>6.1f}%  "
+            f"{spread.probability_of_profit:>4.0f}%  "
+            f"{spread.days_to_expiration:>3}   "
+            f"{spread.distance_from_price_pct:>5.1f}%  "
+            f"${spread.max_loss:>7.2f}"
         )
 
-    print("=" * 120)
+    print("=" * 140)
 
     if len(spreads) > max_display:
         print(f"\n... and {len(spreads) - max_display} more spreads")
@@ -99,10 +96,10 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
     text_fmt = workbook.add_format({"border": 1})
     date_fmt = workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1})
 
-    # Headers
+    # Headers - added POP%, Annualized%, Width
     headers = [
-        "Ticker", "Type", "Expiration", "DTE", "Short Strike", "Long Strike",
-        "Credit", "Max Loss", "Max Profit", "ROR %", "Break-Even",
+        "Ticker", "Type", "Expiration", "DTE", "Width", "Short Strike", "Long Strike",
+        "Credit", "Max Loss", "Max Profit", "ROR %", "Ann %", "POP %", "Break-Even",
         "Stock Price", "Distance %", "Short OI", "Long OI"
     ]
 
@@ -110,21 +107,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         worksheet.write(0, col, header, header_fmt)
 
     # Column widths (sized to fit headers)
-    worksheet.set_column(0, 0, 10)   # Ticker
-    worksheet.set_column(1, 1, 12)   # Type
-    worksheet.set_column(2, 2, 12)   # Expiration
-    worksheet.set_column(3, 3, 6)    # DTE
-    worksheet.set_column(4, 4, 13)   # Short Strike
-    worksheet.set_column(5, 5, 13)   # Long Strike
-    worksheet.set_column(6, 6, 10)   # Credit
-    worksheet.set_column(7, 7, 11)   # Max Loss
-    worksheet.set_column(8, 8, 11)   # Max Profit
-    worksheet.set_column(9, 9, 9)    # ROR %
-    worksheet.set_column(10, 10, 12) # Break-Even
-    worksheet.set_column(11, 11, 12) # Stock Price
-    worksheet.set_column(12, 12, 12) # Distance %
-    worksheet.set_column(13, 13, 10) # Short OI
-    worksheet.set_column(14, 14, 10) # Long OI
+    col_widths = [10, 12, 12, 6, 7, 13, 13, 10, 11, 11, 9, 9, 8, 12, 12, 12, 10, 10]
+    for col, width in enumerate(col_widths):
+        worksheet.set_column(col, col, width)
 
     # Write data
     for row, spread in enumerate(spreads, start=1):
@@ -132,23 +117,26 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         worksheet.write(row, 1, spread.spread_type.replace("_", " ").title(), text_fmt)
         worksheet.write(row, 2, spread.expiration, date_fmt)
         worksheet.write(row, 3, spread.days_to_expiration, num_fmt)
-        worksheet.write(row, 4, spread.short_leg.strike, money_fmt)
-        worksheet.write(row, 5, spread.long_leg.strike, money_fmt)
-        worksheet.write(row, 6, spread.net_credit, money_fmt)
-        worksheet.write(row, 7, spread.max_loss, money_fmt)
-        worksheet.write(row, 8, spread.max_profit, money_fmt)
-        worksheet.write(row, 9, spread.return_on_risk / 100, pct_fmt)
-        worksheet.write(row, 10, spread.break_even, money_fmt)
-        worksheet.write(row, 11, spread.current_stock_price, money_fmt)
-        worksheet.write(row, 12, spread.distance_from_price_pct / 100, pct_fmt)
-        worksheet.write(row, 13, spread.short_leg.open_interest, num_fmt)
-        worksheet.write(row, 14, spread.long_leg.open_interest, num_fmt)
+        worksheet.write(row, 4, spread.width, num_fmt)
+        worksheet.write(row, 5, spread.short_leg.strike, money_fmt)
+        worksheet.write(row, 6, spread.long_leg.strike, money_fmt)
+        worksheet.write(row, 7, spread.net_credit, money_fmt)
+        worksheet.write(row, 8, spread.max_loss, money_fmt)
+        worksheet.write(row, 9, spread.max_profit, money_fmt)
+        worksheet.write(row, 10, spread.return_on_risk / 100, pct_fmt)
+        worksheet.write(row, 11, spread.annualized_return / 100, pct_fmt)
+        worksheet.write(row, 12, spread.probability_of_profit / 100, pct_fmt)
+        worksheet.write(row, 13, spread.break_even, money_fmt)
+        worksheet.write(row, 14, spread.current_stock_price, money_fmt)
+        worksheet.write(row, 15, spread.distance_from_price_pct / 100, pct_fmt)
+        worksheet.write(row, 16, spread.short_leg.open_interest, num_fmt)
+        worksheet.write(row, 17, spread.long_leg.open_interest, num_fmt)
 
     # Conditional formatting with gradients
     last_row = len(spreads)
 
-    # ROR % (column J, index 9) - Red to Green gradient (higher is better)
-    worksheet.conditional_format(1, 9, last_row, 9, {
+    # ROR % (column K, index 10) - Red to Green gradient (higher is better)
+    worksheet.conditional_format(1, 10, last_row, 10, {
         "type": "3_color_scale",
         "min_type": "num",
         "mid_type": "num",
@@ -156,6 +144,34 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_value": 0.15,
         "mid_value": 0.25,
         "max_value": 0.40,
+        "min_color": "#F8696B",  # Red
+        "mid_color": "#FFEB84",  # Yellow
+        "max_color": "#63BE7B",  # Green
+    })
+
+    # Annualized % (column L, index 11) - Red to Green gradient
+    worksheet.conditional_format(1, 11, last_row, 11, {
+        "type": "3_color_scale",
+        "min_type": "num",
+        "mid_type": "num",
+        "max_type": "num",
+        "min_value": 1.0,
+        "mid_value": 2.0,
+        "max_value": 4.0,
+        "min_color": "#F8696B",  # Red
+        "mid_color": "#FFEB84",  # Yellow
+        "max_color": "#63BE7B",  # Green
+    })
+
+    # POP % (column M, index 12) - Red to Green gradient (higher is better)
+    worksheet.conditional_format(1, 12, last_row, 12, {
+        "type": "3_color_scale",
+        "min_type": "num",
+        "mid_type": "num",
+        "max_type": "num",
+        "min_value": 0.60,
+        "mid_value": 0.70,
+        "max_value": 0.80,
         "min_color": "#F8696B",  # Red
         "mid_color": "#FFEB84",  # Yellow
         "max_color": "#63BE7B",  # Green
@@ -175,8 +191,8 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "max_color": "#63BE7B",  # Green (more time)
     })
 
-    # Distance % (column M, index 12) - Red to Blue gradient (higher is safer)
-    worksheet.conditional_format(1, 12, last_row, 12, {
+    # Distance % (column P, index 15) - Red to Blue gradient (higher is safer)
+    worksheet.conditional_format(1, 15, last_row, 15, {
         "type": "3_color_scale",
         "min_type": "num",
         "mid_type": "num",
@@ -274,14 +290,17 @@ def run_screener(
     fetcher = OptionsFetcher()
     all_spreads = []
     tickers_with_errors = []
+    tickers_skipped_earnings = []
 
     if verbose:
         print(f"Screening {len(config.tickers)} tickers...")
         print(
             f"   Filters: ROR >= {config.min_return_on_risk}%, "
             f"DTE {config.min_dte}-{config.max_dte}, "
-            f"Min Credit ${config.min_credit:.2f}"
+            f"Widths: ${', $'.join(str(w) for w in config.spread_widths)}"
         )
+        if config.earnings_buffer_days > 0:
+            print(f"   Earnings filter: Skip if earnings within {config.earnings_buffer_days} days")
         print()
 
     for i, ticker in enumerate(config.tickers, 1):
@@ -289,6 +308,14 @@ def run_screener(
             print(f"  [{i}/{len(config.tickers)}] Analyzing {ticker}...", end=" ")
 
         try:
+            # Check for upcoming earnings
+            if config.earnings_buffer_days > 0:
+                if fetcher.has_earnings_soon(ticker, config.earnings_buffer_days):
+                    tickers_skipped_earnings.append(ticker)
+                    if verbose:
+                        print("Skipped (earnings soon)")
+                    continue
+
             spreads = screen_ticker(ticker, config, fetcher)
             all_spreads.extend(spreads)
             if verbose:
@@ -306,6 +333,8 @@ def run_screener(
 
     if verbose:
         print(f"\nFound {len(all_spreads)} qualifying spreads total")
+        if tickers_skipped_earnings:
+            print(f"Skipped {len(tickers_skipped_earnings)} tickers due to upcoming earnings: {', '.join(tickers_skipped_earnings)}")
 
     # Display results
     if verbose and all_spreads:
@@ -314,7 +343,7 @@ def run_screener(
     # Save results
     xlsx_path = save_results(all_spreads, timestamp)
     if verbose and xlsx_path:
-        print(f"Results saved to {xlsx_path}")
+        print(f"\nResults saved to {xlsx_path}")
 
     # Generate visualizations
     dashboard_path = None
@@ -376,6 +405,7 @@ Examples:
   python -m src.screener
   python -m src.screener --tickers AAPL MSFT GOOGL
   python -m src.screener --min-ror 25 --max-dte 60
+  python -m src.screener --widths 1 2 5 10
   python -m src.screener --visualize --alert
         """,
     )
@@ -412,7 +442,7 @@ Examples:
         "--min-credit",
         type=float,
         default=None,
-        help="Minimum net credit (default: 0.30)",
+        help="Minimum net credit (default: 0.20)",
     )
 
     parser.add_argument(
@@ -423,10 +453,18 @@ Examples:
     )
 
     parser.add_argument(
-        "--spread-width",
+        "--widths",
+        nargs="+",
         type=int,
         default=None,
-        help="Width between strikes in dollars (default: 5)",
+        help="Spread widths to scan in dollars (default: 1 2 5)",
+    )
+
+    parser.add_argument(
+        "--earnings-buffer",
+        type=int,
+        default=None,
+        help="Skip tickers with earnings within N days (default: 7, use 0 to disable)",
     )
 
     parser.add_argument(
@@ -500,8 +538,10 @@ def main() -> int:
         config.min_credit = args.min_credit
     if args.max_loss is not None:
         config.max_loss = args.max_loss
-    if args.spread_width is not None:
-        config.spread_width = args.spread_width
+    if args.widths is not None:
+        config.spread_widths = args.widths
+    if args.earnings_buffer is not None:
+        config.earnings_buffer_days = args.earnings_buffer
     if args.min_oi is not None:
         config.min_open_interest = args.min_oi
 

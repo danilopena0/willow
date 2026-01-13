@@ -23,6 +23,83 @@ def create_option_leg(row: dict) -> OptionLeg:
     )
 
 
+class MissingDeltaError(Exception):
+    """Raised when delta is required but not available."""
+    pass
+
+
+def calculate_pop(short_delta: float | None, spread_type: str) -> float:
+    """
+    Calculate Probability of Profit from short leg delta.
+
+    For credit spreads:
+    - POP ≈ 1 - |delta of short strike|
+    - A 0.30 delta short option has ~70% POP
+
+    Args:
+        short_delta: Delta of the short leg (absolute value)
+        spread_type: Type of spread ("bull_put" or "bear_call")
+
+    Returns:
+        Probability of profit as percentage (0-100)
+
+    Raises:
+        MissingDeltaError: If delta is None
+    """
+    if short_delta is None:
+        raise MissingDeltaError("Delta is required to calculate probability of profit")
+
+    # Delta should already be absolute value from model normalization
+    delta = abs(short_delta)
+
+    # POP = 1 - delta (as percentage)
+    pop = (1 - delta) * 100
+
+    return round(pop, 1)
+
+
+def find_long_leg_strike(
+    options: pl.DataFrame,
+    short_strike: float,
+    target_width: int,
+    spread_type: str,
+) -> pl.DataFrame:
+    """
+    Find the best matching long leg for a given short strike and width.
+
+    Args:
+        options: DataFrame of options (calls or puts)
+        short_strike: Strike price of short leg
+        target_width: Desired spread width in dollars
+        spread_type: "bull_put" or "bear_call"
+
+    Returns:
+        DataFrame with matching long leg candidates (may be empty)
+    """
+    if spread_type == SPREAD_TYPE_BULL_PUT:
+        # Long leg is below short strike for bull put
+        target_strike = short_strike - target_width
+        tolerance = 1.0  # Allow $1 tolerance for non-standard strikes
+
+        candidates = options.filter(
+            (pl.col("strike") >= target_strike - tolerance)
+            & (pl.col("strike") <= target_strike + tolerance)
+            & (pl.col("strike") < short_strike)
+        ).sort("strike", descending=True)
+    else:
+        # Long leg is above short strike for bear call
+        target_strike = short_strike + target_width
+        tolerance = 1.0
+
+        candidates = options.filter(
+            (pl.col("strike") >= target_strike - tolerance)
+            & (pl.col("strike") <= target_strike + tolerance)
+            & (pl.col("strike") > short_strike)
+        ).sort("strike")
+
+    return candidates
+
+
 def screen_bull_put_spreads(
     puts: pl.DataFrame,
     ticker: str,
@@ -32,7 +109,7 @@ def screen_bull_put_spreads(
     config: ScreenerConfig,
 ) -> list[CreditSpread]:
     """
-    Screen for bull put spreads (bullish strategy).
+    Screen for bull put spreads (bullish strategy) across multiple widths.
 
     A bull put spread involves:
     - Selling a put at a higher strike (short leg)
@@ -60,7 +137,7 @@ def screen_bull_put_spreads(
     if otm_puts.is_empty():
         return []
 
-    # Filter by delta range if delta is available
+    # Filter by delta range - delta is required for POP calculation
     delta_min, delta_max = config.target_delta_short
 
     # Check if delta column has non-null values
@@ -69,90 +146,92 @@ def screen_bull_put_spreads(
         and otm_puts.select(pl.col("delta").is_not_null().any()).item()
     )
 
-    if has_delta:
-        short_candidates = otm_puts.filter(
-            (pl.col("delta").abs().is_between(delta_min, delta_max))
-            & (pl.col("open_interest") >= config.min_open_interest)
-        )
-    else:
-        # If no delta, filter by distance from price (rough proxy)
-        # Target roughly 15-30% OTM as a proxy for 0.20-0.35 delta
-        short_candidates = otm_puts.filter(
-            (pl.col("strike") >= stock_price * 0.85)
-            & (pl.col("strike") <= stock_price * 0.95)
-            & (pl.col("open_interest") >= config.min_open_interest)
-        )
+    if not has_delta:
+        # Delta is required for POP calculation
+        return []
+
+    short_candidates = otm_puts.filter(
+        (pl.col("delta").abs().is_between(delta_min, delta_max))
+        & (pl.col("delta").is_not_null())
+        & (pl.col("open_interest") >= config.min_open_interest)
+    )
 
     if short_candidates.is_empty():
         return []
 
     spreads = []
 
+    # Iterate through each short leg candidate
     for short_row in short_candidates.iter_rows(named=True):
         short_strike = short_row["strike"]
-        long_strike = short_strike - config.spread_width
+        short_delta = short_row["delta"]
 
-        # Find the long leg
-        long_candidates = puts.filter(pl.col("strike") == long_strike)
+        # Try each configured width
+        for target_width in config.spread_widths:
+            long_candidates = find_long_leg_strike(
+                puts, short_strike, target_width, SPREAD_TYPE_BULL_PUT
+            )
 
-        if long_candidates.is_empty():
-            # Try to find closest strike below
-            below_strikes = puts.filter(
-                (pl.col("strike") < short_strike)
-                & (pl.col("strike") >= short_strike - config.spread_width - 2.5)
-            ).sort("strike", descending=True)
-
-            if below_strikes.is_empty():
+            if long_candidates.is_empty():
                 continue
 
-            long_candidates = below_strikes.head(1)
+            long_row = long_candidates.row(0, named=True)
+            actual_width = short_strike - long_row["strike"]
 
-        long_row = long_candidates.row(0, named=True)
-        actual_width = short_strike - long_row["strike"]
+            # Skip if width is too small
+            if actual_width < 0.5:
+                continue
 
-        # Calculate premiums (midpoint of bid/ask)
-        short_premium = (short_row["bid"] + short_row["ask"]) / 2
-        long_premium = (long_row["bid"] + long_row["ask"]) / 2
+            # Calculate premiums (midpoint of bid/ask)
+            short_premium = (short_row["bid"] + short_row["ask"]) / 2
+            long_premium = (long_row["bid"] + long_row["ask"]) / 2
 
-        # Skip if premiums are invalid
-        if short_premium <= 0 or long_premium < 0:
-            continue
+            # Skip if premiums are invalid
+            if short_premium <= 0 or long_premium < 0:
+                continue
 
-        net_credit = short_premium - long_premium
-        max_loss = (actual_width - net_credit) * 100  # Per contract
-        max_profit = net_credit * 100  # Per contract
+            net_credit = short_premium - long_premium
+            max_loss = (actual_width - net_credit) * 100  # Per contract
+            max_profit = net_credit * 100  # Per contract
 
-        # Skip if no profit potential
-        if net_credit <= 0 or max_loss <= 0:
-            continue
+            # Skip if no profit potential
+            if net_credit <= 0 or max_loss <= 0:
+                continue
 
-        return_on_risk = (net_credit / (actual_width - net_credit)) * 100
-        break_even = short_strike - net_credit
-        distance_from_price = stock_price - short_strike
+            return_on_risk = (net_credit / (actual_width - net_credit)) * 100
+            break_even = short_strike - net_credit
+            distance_from_price = stock_price - short_strike
 
-        # Apply filters
-        if (
-            net_credit >= config.min_credit
-            and max_loss <= config.max_loss
-            and return_on_risk >= config.min_return_on_risk
-        ):
-            spread = CreditSpread(
-                ticker=ticker,
-                spread_type=SPREAD_TYPE_BULL_PUT,
-                expiration=expiration,
-                days_to_expiration=dte,
-                short_leg=create_option_leg(short_row),
-                long_leg=create_option_leg(long_row),
-                net_credit=round(net_credit, 2),
-                max_loss=round(max_loss, 2),
-                max_profit=round(max_profit, 2),
-                return_on_risk=round(return_on_risk, 2),
-                break_even=round(break_even, 2),
-                width=actual_width,
-                current_stock_price=round(stock_price, 2),
-                distance_from_price=round(distance_from_price, 2),
-            )
-            spreads.append(spread)
+            # Calculate POP - skip spread if delta not available
+            try:
+                pop = calculate_pop(short_delta, SPREAD_TYPE_BULL_PUT)
+            except MissingDeltaError:
+                continue
+
+            # Apply filters
+            if (
+                net_credit >= config.min_credit
+                and max_loss <= config.max_loss
+                and return_on_risk >= config.min_return_on_risk
+            ):
+                spread = CreditSpread(
+                    ticker=ticker,
+                    spread_type=SPREAD_TYPE_BULL_PUT,
+                    expiration=expiration,
+                    days_to_expiration=dte,
+                    short_leg=create_option_leg(short_row),
+                    long_leg=create_option_leg(long_row),
+                    net_credit=round(net_credit, 2),
+                    max_loss=round(max_loss, 2),
+                    max_profit=round(max_profit, 2),
+                    return_on_risk=round(return_on_risk, 2),
+                    break_even=round(break_even, 2),
+                    width=actual_width,
+                    current_stock_price=round(stock_price, 2),
+                    distance_from_price=round(distance_from_price, 2),
+                    probability_of_profit=pop,
+                )
+                spreads.append(spread)
 
     return spreads
 
@@ -166,7 +245,7 @@ def screen_bear_call_spreads(
     config: ScreenerConfig,
 ) -> list[CreditSpread]:
     """
-    Screen for bear call spreads (bearish strategy).
+    Screen for bear call spreads (bearish strategy) across multiple widths.
 
     A bear call spread involves:
     - Selling a call at a lower strike (short leg)
@@ -194,7 +273,7 @@ def screen_bear_call_spreads(
     if otm_calls.is_empty():
         return []
 
-    # Filter by delta range if delta is available
+    # Filter by delta range - delta is required for POP calculation
     delta_min, delta_max = config.target_delta_short
 
     # Check if delta column has non-null values
@@ -203,90 +282,92 @@ def screen_bear_call_spreads(
         and otm_calls.select(pl.col("delta").is_not_null().any()).item()
     )
 
-    if has_delta:
-        short_candidates = otm_calls.filter(
-            (pl.col("delta").abs().is_between(delta_min, delta_max))
-            & (pl.col("open_interest") >= config.min_open_interest)
-        )
-    else:
-        # If no delta, filter by distance from price (rough proxy)
-        # Target roughly 5-15% OTM as a proxy for 0.20-0.35 delta
-        short_candidates = otm_calls.filter(
-            (pl.col("strike") >= stock_price * 1.05)
-            & (pl.col("strike") <= stock_price * 1.15)
-            & (pl.col("open_interest") >= config.min_open_interest)
-        )
+    if not has_delta:
+        # Delta is required for POP calculation
+        return []
+
+    short_candidates = otm_calls.filter(
+        (pl.col("delta").abs().is_between(delta_min, delta_max))
+        & (pl.col("delta").is_not_null())
+        & (pl.col("open_interest") >= config.min_open_interest)
+    )
 
     if short_candidates.is_empty():
         return []
 
     spreads = []
 
+    # Iterate through each short leg candidate
     for short_row in short_candidates.iter_rows(named=True):
         short_strike = short_row["strike"]
-        long_strike = short_strike + config.spread_width
+        short_delta = short_row["delta"]
 
-        # Find the long leg
-        long_candidates = calls.filter(pl.col("strike") == long_strike)
+        # Try each configured width
+        for target_width in config.spread_widths:
+            long_candidates = find_long_leg_strike(
+                calls, short_strike, target_width, SPREAD_TYPE_BEAR_CALL
+            )
 
-        if long_candidates.is_empty():
-            # Try to find closest strike above
-            above_strikes = calls.filter(
-                (pl.col("strike") > short_strike)
-                & (pl.col("strike") <= short_strike + config.spread_width + 2.5)
-            ).sort("strike")
-
-            if above_strikes.is_empty():
+            if long_candidates.is_empty():
                 continue
 
-            long_candidates = above_strikes.head(1)
+            long_row = long_candidates.row(0, named=True)
+            actual_width = long_row["strike"] - short_strike
 
-        long_row = long_candidates.row(0, named=True)
-        actual_width = long_row["strike"] - short_strike
+            # Skip if width is too small
+            if actual_width < 0.5:
+                continue
 
-        # Calculate premiums (midpoint of bid/ask)
-        short_premium = (short_row["bid"] + short_row["ask"]) / 2
-        long_premium = (long_row["bid"] + long_row["ask"]) / 2
+            # Calculate premiums (midpoint of bid/ask)
+            short_premium = (short_row["bid"] + short_row["ask"]) / 2
+            long_premium = (long_row["bid"] + long_row["ask"]) / 2
 
-        # Skip if premiums are invalid
-        if short_premium <= 0 or long_premium < 0:
-            continue
+            # Skip if premiums are invalid
+            if short_premium <= 0 or long_premium < 0:
+                continue
 
-        net_credit = short_premium - long_premium
-        max_loss = (actual_width - net_credit) * 100  # Per contract
-        max_profit = net_credit * 100  # Per contract
+            net_credit = short_premium - long_premium
+            max_loss = (actual_width - net_credit) * 100  # Per contract
+            max_profit = net_credit * 100  # Per contract
 
-        # Skip if no profit potential
-        if net_credit <= 0 or max_loss <= 0:
-            continue
+            # Skip if no profit potential
+            if net_credit <= 0 or max_loss <= 0:
+                continue
 
-        return_on_risk = (net_credit / (actual_width - net_credit)) * 100
-        break_even = short_strike + net_credit
-        distance_from_price = short_strike - stock_price
+            return_on_risk = (net_credit / (actual_width - net_credit)) * 100
+            break_even = short_strike + net_credit
+            distance_from_price = short_strike - stock_price
 
-        # Apply filters
-        if (
-            net_credit >= config.min_credit
-            and max_loss <= config.max_loss
-            and return_on_risk >= config.min_return_on_risk
-        ):
-            spread = CreditSpread(
-                ticker=ticker,
-                spread_type=SPREAD_TYPE_BEAR_CALL,
-                expiration=expiration,
-                days_to_expiration=dte,
-                short_leg=create_option_leg(short_row),
-                long_leg=create_option_leg(long_row),
-                net_credit=round(net_credit, 2),
-                max_loss=round(max_loss, 2),
-                max_profit=round(max_profit, 2),
-                return_on_risk=round(return_on_risk, 2),
-                break_even=round(break_even, 2),
-                width=actual_width,
-                current_stock_price=round(stock_price, 2),
-                distance_from_price=round(distance_from_price, 2),
-            )
-            spreads.append(spread)
+            # Calculate POP - skip spread if delta not available
+            try:
+                pop = calculate_pop(short_delta, SPREAD_TYPE_BEAR_CALL)
+            except MissingDeltaError:
+                continue
+
+            # Apply filters
+            if (
+                net_credit >= config.min_credit
+                and max_loss <= config.max_loss
+                and return_on_risk >= config.min_return_on_risk
+            ):
+                spread = CreditSpread(
+                    ticker=ticker,
+                    spread_type=SPREAD_TYPE_BEAR_CALL,
+                    expiration=expiration,
+                    days_to_expiration=dte,
+                    short_leg=create_option_leg(short_row),
+                    long_leg=create_option_leg(long_row),
+                    net_credit=round(net_credit, 2),
+                    max_loss=round(max_loss, 2),
+                    max_profit=round(max_profit, 2),
+                    return_on_risk=round(return_on_risk, 2),
+                    break_even=round(break_even, 2),
+                    width=actual_width,
+                    current_stock_price=round(stock_price, 2),
+                    distance_from_price=round(distance_from_price, 2),
+                    probability_of_profit=pop,
+                )
+                spreads.append(spread)
 
     return spreads
 
@@ -331,6 +412,7 @@ def rank_spreads(spreads: list[CreditSpread]) -> list[CreditSpread]:
 
     Scoring factors:
     - Higher return on risk is better
+    - Higher probability of profit is better
     - Higher distance from price (safety buffer) is better
     - Better liquidity (higher OI) is better
 
@@ -347,6 +429,9 @@ def rank_spreads(spreads: list[CreditSpread]) -> list[CreditSpread]:
         # Normalize return on risk (0-100 range expected)
         ror_score = spread.return_on_risk / 100
 
+        # Normalize probability of profit
+        pop_score = spread.probability_of_profit / 100
+
         # Normalize distance from price as percentage
         distance_pct = spread.distance_from_price_pct / 100
 
@@ -354,8 +439,8 @@ def rank_spreads(spreads: list[CreditSpread]) -> list[CreditSpread]:
         oi = min(spread.short_leg.open_interest, 10000)
         oi_score = (oi / 10000) ** 0.5  # Square root to compress range
 
-        # Weighted combination
-        return (ror_score * 0.5) + (distance_pct * 0.3) + (oi_score * 0.2)
+        # Weighted combination (POP is important!)
+        return (ror_score * 0.35) + (pop_score * 0.25) + (distance_pct * 0.25) + (oi_score * 0.15)
 
     return sorted(spreads, key=quality_score, reverse=True)
 

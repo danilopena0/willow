@@ -27,6 +27,10 @@ def load_config() -> ScreenerConfig:
     tickers_env = os.getenv("SCREENER_TICKERS")
     tickers = tickers_env.split(",") if tickers_env else None
 
+    # Parse spread widths from comma-separated string
+    widths_env = os.getenv("SCREENER_SPREAD_WIDTHS", "1,2,5")
+    spread_widths = [int(w.strip()) for w in widths_env.split(",")]
+
     return ScreenerConfig(
         tickers=tickers or ScreenerConfig.model_fields["tickers"].default_factory(),
         min_dte=int(os.getenv("SCREENER_MIN_DTE", "30")),
@@ -35,7 +39,8 @@ def load_config() -> ScreenerConfig:
         max_loss=float(os.getenv("SCREENER_MAX_LOSS", "500")),
         min_return_on_risk=float(os.getenv("SCREENER_MIN_ROR", "20")),
         min_open_interest=int(os.getenv("SCREENER_MIN_OI", "50")),
-        spread_width=int(os.getenv("SCREENER_SPREAD_WIDTH", "5")),
+        spread_widths=spread_widths,
+        earnings_buffer_days=int(os.getenv("SCREENER_EARNINGS_BUFFER", "0")),
         alert_threshold_ror=float(os.getenv("SCREENER_ALERT_THRESHOLD", "30")),
         enable_slack_alerts=os.getenv("ENABLE_SLACK_ALERTS", "false").lower() == "true",
     )

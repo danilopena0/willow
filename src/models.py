@@ -51,14 +51,16 @@ class CreditSpread(BaseModel):
     width: float
     current_stock_price: float
     distance_from_price: float  # short strike distance from current price
+    probability_of_profit: float  # estimated POP based on delta
     timestamp: datetime = Field(default_factory=datetime.now)
 
-    # Phase 2 fields (commented out for future implementation)
-    # rsi: float | None = None
-    # trend: str | None = None  # "bullish", "bearish", "neutral"
-    # ai_recommendation: str | None = None
-    # ai_confidence: float | None = None
-    # forecasted_prob_profit: float | None = None
+    @computed_field
+    @property
+    def annualized_return(self) -> float:
+        """Annualized return on risk (ROR * 365 / DTE)."""
+        if self.days_to_expiration == 0:
+            return 0.0
+        return round(self.return_on_risk * (365 / self.days_to_expiration), 2)
 
     @computed_field
     @property
@@ -102,7 +104,8 @@ class ScreenerConfig(BaseModel):
         description="Target delta range for short leg"
     )
     min_open_interest: int = Field(default=50, description="Minimum open interest for liquidity")
-    spread_width: int = Field(default=5, description="Width between strikes in dollars")
+    spread_widths: list[int] = Field(default_factory=lambda: [1, 2, 5], description="Widths between strikes to scan")
+    earnings_buffer_days: int = Field(default=0, description="Skip tickers with earnings within N days (0 = disabled)")
     alert_threshold_ror: float = Field(default=30.0, description="Alert if ROR exceeds this")
 
     # Alert settings
