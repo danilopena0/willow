@@ -201,6 +201,7 @@ def screen_bull_put_spreads(
             return_on_risk = (net_credit / (actual_width - net_credit)) * 100
             break_even = short_strike - net_credit
             distance_from_price = stock_price - short_strike
+            distance_pct = (distance_from_price / stock_price) * 100 if stock_price > 0 else 0
 
             # Calculate POP - skip spread if delta not available
             try:
@@ -213,6 +214,8 @@ def screen_bull_put_spreads(
                 net_credit >= config.min_credit
                 and max_loss <= config.max_loss
                 and return_on_risk >= config.min_return_on_risk
+                and return_on_risk <= config.max_return_on_risk
+                and distance_pct >= config.min_distance_pct
             ):
                 spread = CreditSpread(
                     ticker=ticker,
@@ -337,6 +340,7 @@ def screen_bear_call_spreads(
             return_on_risk = (net_credit / (actual_width - net_credit)) * 100
             break_even = short_strike + net_credit
             distance_from_price = short_strike - stock_price
+            distance_pct = (distance_from_price / stock_price) * 100 if stock_price > 0 else 0
 
             # Calculate POP - skip spread if delta not available
             try:
@@ -349,6 +353,8 @@ def screen_bear_call_spreads(
                 net_credit >= config.min_credit
                 and max_loss <= config.max_loss
                 and return_on_risk >= config.min_return_on_risk
+                and return_on_risk <= config.max_return_on_risk
+                and distance_pct >= config.min_distance_pct
             ):
                 spread = CreditSpread(
                     ticker=ticker,

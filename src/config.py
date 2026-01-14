@@ -38,6 +38,8 @@ def load_config() -> ScreenerConfig:
         min_credit=float(os.getenv("SCREENER_MIN_CREDIT", "0.20")),
         max_loss=float(os.getenv("SCREENER_MAX_LOSS", "500")),
         min_return_on_risk=float(os.getenv("SCREENER_MIN_ROR", "20")),
+        max_return_on_risk=float(os.getenv("SCREENER_MAX_ROR", "75")),
+        min_distance_pct=float(os.getenv("SCREENER_MIN_DISTANCE", "5")),
         min_open_interest=int(os.getenv("SCREENER_MIN_OI", "50")),
         spread_widths=spread_widths,
         earnings_buffer_days=int(os.getenv("SCREENER_EARNINGS_BUFFER", "0")),

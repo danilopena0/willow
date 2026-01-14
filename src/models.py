@@ -99,6 +99,8 @@ class ScreenerConfig(BaseModel):
     min_credit: float = Field(default=0.20, description="Minimum net credit per spread")
     max_loss: float = Field(default=500.0, description="Maximum loss per spread")
     min_return_on_risk: float = Field(default=20.0, description="Minimum return on risk percentage")
+    max_return_on_risk: float = Field(default=75.0, description="Maximum return on risk percentage (filter unrealistic)")
+    min_distance_pct: float = Field(default=5.0, description="Minimum distance from price as percentage")
     target_delta_short: tuple[float, float] = Field(
         default=(0.20, 0.35),
         description="Target delta range for short leg"

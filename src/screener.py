@@ -2,9 +2,13 @@
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import NamedTuple
 
 from src.models import CreditSpread, ScreenerConfig, ScreenerResult
+
+
 from src.config import (
     load_config,
     RESULTS_DIR,
@@ -18,6 +22,18 @@ from src.spread_calculator import (
 )
 from src.visualizer import create_spread_dashboard, create_top_spreads_table
 from src.alerter import send_alerts
+
+
+# Maximum parallel workers for fetching tickers
+MAX_WORKERS = 5
+
+
+class TickerResult(NamedTuple):
+    """Result from screening a single ticker."""
+    ticker: str
+    spreads: list[CreditSpread]
+    error: str | None = None
+    skipped_earnings: bool = False
 
 
 def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
@@ -268,11 +284,36 @@ def screen_ticker(
     return all_spreads
 
 
+def _screen_ticker_task(
+    ticker: str,
+    config: ScreenerConfig,
+    fetcher: OptionsFetcher,
+) -> TickerResult:
+    """
+    Screen a single ticker (for use in parallel execution).
+
+    Returns:
+        TickerResult with spreads or error information
+    """
+    try:
+        # Check for upcoming earnings
+        if config.earnings_buffer_days > 0:
+            if fetcher.has_earnings_soon(ticker, config.earnings_buffer_days):
+                return TickerResult(ticker=ticker, spreads=[], skipped_earnings=True)
+
+        spreads = screen_ticker(ticker, config, fetcher)
+        return TickerResult(ticker=ticker, spreads=spreads)
+
+    except Exception as e:
+        return TickerResult(ticker=ticker, spreads=[], error=str(e))
+
+
 def run_screener(
     config: ScreenerConfig,
     visualize: bool = False,
     alert: bool = False,
     verbose: bool = True,
+    parallel: bool = True,
 ) -> ScreenerResult:
     """
     Run the full screening workflow.
@@ -282,6 +323,7 @@ def run_screener(
         visualize: Whether to generate visualizations
         alert: Whether to send alerts
         verbose: Whether to print progress
+        parallel: Whether to use parallel fetching
 
     Returns:
         ScreenerResult with all found spreads
@@ -295,37 +337,65 @@ def run_screener(
     if verbose:
         print(f"Screening {len(config.tickers)} tickers...")
         print(
-            f"   Filters: ROR >= {config.min_return_on_risk}%, "
+            f"   Filters: ROR {config.min_return_on_risk}-{config.max_return_on_risk}%, "
+            f"Dist >= {config.min_distance_pct}%, "
             f"DTE {config.min_dte}-{config.max_dte}, "
             f"Widths: ${', $'.join(str(w) for w in config.spread_widths)}"
         )
         if config.earnings_buffer_days > 0:
             print(f"   Earnings filter: Skip if earnings within {config.earnings_buffer_days} days")
+        if parallel:
+            print(f"   Mode: Parallel ({MAX_WORKERS} workers)")
         print()
 
-    for i, ticker in enumerate(config.tickers, 1):
-        if verbose:
-            print(f"  [{i}/{len(config.tickers)}] Analyzing {ticker}...", end=" ")
+    if parallel and len(config.tickers) > 1:
+        # Parallel execution with ThreadPoolExecutor
+        completed = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Submit all tasks
+            future_to_ticker = {
+                executor.submit(_screen_ticker_task, ticker, config, fetcher): ticker
+                for ticker in config.tickers
+            }
 
-        try:
-            # Check for upcoming earnings
-            if config.earnings_buffer_days > 0:
-                if fetcher.has_earnings_soon(ticker, config.earnings_buffer_days):
-                    tickers_skipped_earnings.append(ticker)
-                    if verbose:
-                        print("Skipped (earnings soon)")
-                    continue
+            # Process results as they complete
+            for future in as_completed(future_to_ticker):
+                result = future.result()
+                completed += 1
 
-            spreads = screen_ticker(ticker, config, fetcher)
-            all_spreads.extend(spreads)
+                if verbose:
+                    status = ""
+                    if result.skipped_earnings:
+                        status = "Skipped (earnings)"
+                        tickers_skipped_earnings.append(result.ticker)
+                    elif result.error:
+                        status = f"Error: {result.error}"
+                        tickers_with_errors.append(result.ticker)
+                    else:
+                        status = f"Found {len(result.spreads)} spreads"
+                        all_spreads.extend(result.spreads)
+
+                    print(f"  [{completed}/{len(config.tickers)}] {result.ticker}: {status}")
+    else:
+        # Sequential execution
+        for i, ticker in enumerate(config.tickers, 1):
             if verbose:
-                print(f"Found {len(spreads)} spreads")
+                print(f"  [{i}/{len(config.tickers)}] Analyzing {ticker}...", end=" ")
 
-        except Exception as e:
-            tickers_with_errors.append(ticker)
-            if verbose:
-                print(f"Error: {e}")
-            continue
+            result = _screen_ticker_task(ticker, config, fetcher)
+
+            if result.skipped_earnings:
+                tickers_skipped_earnings.append(ticker)
+                if verbose:
+                    print("Skipped (earnings soon)")
+            elif result.error:
+                tickers_with_errors.append(ticker)
+                if verbose:
+                    print(f"Error: {result.error}")
+            else:
+                all_spreads.extend(result.spreads)
+                if verbose:
+                    print(f"Found {len(result.spreads)} spreads")
 
     # Remove duplicates and rank
     all_spreads = filter_duplicate_strikes(all_spreads)
@@ -422,6 +492,20 @@ Examples:
         type=float,
         default=None,
         help="Minimum return on risk percentage (default: 20)",
+    )
+
+    parser.add_argument(
+        "--max-ror",
+        type=float,
+        default=None,
+        help="Maximum return on risk percentage (default: 75)",
+    )
+
+    parser.add_argument(
+        "--min-distance",
+        type=float,
+        default=None,
+        help="Minimum distance from price as percentage (default: 5)",
     )
 
     parser.add_argument(
@@ -530,6 +614,10 @@ def main() -> int:
         config.tickers = [t.upper() for t in args.tickers]
     if args.min_ror is not None:
         config.min_return_on_risk = args.min_ror
+    if args.max_ror is not None:
+        config.max_return_on_risk = args.max_ror
+    if args.min_distance is not None:
+        config.min_distance_pct = args.min_distance
     if args.min_dte is not None:
         config.min_dte = args.min_dte
     if args.max_dte is not None:

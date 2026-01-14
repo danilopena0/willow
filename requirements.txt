@@ -10,6 +10,7 @@ requests>=2.31.0
 xlsxwriter>=3.1.0           # Excel output with formatting
 scipy>=1.11.0               # Black-Scholes delta calculation
 numpy>=1.24.0               # Numerical operations
+diskcache>=5.6.0            # Caching for API responses
 
 # Testing
 pytest>=8.0.0

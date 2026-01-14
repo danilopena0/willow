@@ -4,16 +4,22 @@ import math
 import time
 from datetime import datetime, date
 from functools import lru_cache
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import polars as pl
 import yfinance as yf
+from diskcache import Cache
 from scipy.stats import norm
 
 
 # Default risk-free rate (approximate current US Treasury rate)
 RISK_FREE_RATE = 0.045
+
+# Cache configuration
+CACHE_DIR = Path(__file__).parent.parent / "data" / ".cache"
+CACHE_EXPIRE_SECONDS = 300  # 5 minutes
 
 
 def calculate_bs_delta(
@@ -70,18 +76,34 @@ class TickerData(NamedTuple):
 
 
 class OptionsFetcher:
-    """Wrapper for yfinance options data fetching with caching and rate limiting."""
+    """Wrapper for yfinance options data fetching with caching, rate limiting, and retry."""
 
-    def __init__(self, rate_limit_delay: float = 0.5):
+    def __init__(
+        self,
+        rate_limit_delay: float = 0.3,
+        max_retries: int = 3,
+        use_cache: bool = True,
+    ):
         """
         Initialize the options fetcher.
 
         Args:
             rate_limit_delay: Seconds to wait between API calls to avoid rate limiting
+            max_retries: Maximum number of retry attempts on failure
+            use_cache: Whether to use disk caching for API responses
         """
         self.rate_limit_delay = rate_limit_delay
+        self.max_retries = max_retries
+        self.use_cache = use_cache
         self._last_request_time = 0.0
         self._ticker_cache: dict[str, yf.Ticker] = {}
+
+        # Initialize disk cache
+        if use_cache:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            self._cache = Cache(str(CACHE_DIR))
+        else:
+            self._cache = None
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting between API calls."""
@@ -89,6 +111,35 @@ class OptionsFetcher:
         if elapsed < self.rate_limit_delay:
             time.sleep(self.rate_limit_delay - elapsed)
         self._last_request_time = time.time()
+
+    def _retry_with_backoff(self, func, *args, **kwargs):
+        """
+        Execute a function with exponential backoff retry.
+
+        Args:
+            func: Function to execute
+            *args: Positional arguments for func
+            **kwargs: Keyword arguments for func
+
+        Returns:
+            Result of func
+
+        Raises:
+            Exception: If all retries fail
+        """
+        last_exception = None
+
+        for attempt in range(self.max_retries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < self.max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s...
+                    wait_time = (2 ** attempt)
+                    time.sleep(wait_time)
+
+        raise last_exception
 
     def _get_ticker(self, symbol: str) -> yf.Ticker:
         """Get a cached ticker object."""
@@ -139,7 +190,7 @@ class OptionsFetcher:
 
     def fetch_options_chain(self, ticker: str, expiration: str) -> OptionsChain:
         """
-        Fetch options chain for a specific expiration.
+        Fetch options chain for a specific expiration with caching and retry.
 
         Args:
             ticker: Stock ticker symbol
@@ -148,30 +199,48 @@ class OptionsFetcher:
         Returns:
             OptionsChain containing calls and puts DataFrames
         """
+        cache_key = f"chain:{ticker}:{expiration}"
+
+        # Check cache first
+        if self._cache is not None:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         self._rate_limit()
-        stock = self._get_ticker(ticker)
 
-        # Get current stock price
-        info = stock.info
-        price = info.get("regularMarketPrice") or info.get("currentPrice", 0.0)
+        def _fetch():
+            stock = self._get_ticker(ticker)
 
-        # Calculate days to expiry
-        exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
-        days_to_expiry = (exp_date - datetime.now().date()).days
+            # Get current stock price
+            info = stock.info
+            price = info.get("regularMarketPrice") or info.get("currentPrice", 0.0)
 
-        # Fetch options chain
-        chain = stock.option_chain(expiration)
+            # Calculate days to expiry
+            exp_date = datetime.strptime(expiration, "%Y-%m-%d").date()
+            days_to_expiry = (exp_date - datetime.now().date()).days
 
-        # Convert to Polars DataFrames with standardized column names and calculated delta
-        calls_df = self._convert_options_df(chain.calls, "call", price, days_to_expiry)
-        puts_df = self._convert_options_df(chain.puts, "put", price, days_to_expiry)
+            # Fetch options chain
+            chain = stock.option_chain(expiration)
 
-        return OptionsChain(
-            calls=calls_df,
-            puts=puts_df,
-            expiration=exp_date,
-            stock_price=price,
-        )
+            # Convert to Polars DataFrames with standardized column names and calculated delta
+            calls_df = self._convert_options_df(chain.calls, "call", price, days_to_expiry)
+            puts_df = self._convert_options_df(chain.puts, "put", price, days_to_expiry)
+
+            return OptionsChain(
+                calls=calls_df,
+                puts=puts_df,
+                expiration=exp_date,
+                stock_price=price,
+            )
+
+        result = self._retry_with_backoff(_fetch)
+
+        # Cache the result
+        if self._cache is not None:
+            self._cache.set(cache_key, result, expire=CACHE_EXPIRE_SECONDS)
+
+        return result
 
     def _convert_options_df(
         self,
