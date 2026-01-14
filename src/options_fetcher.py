@@ -77,51 +77,43 @@ class TickerData(NamedTuple):
     price_history: pl.DataFrame
 
 
-class OptionsFetcher:
-    """Wrapper for yfinance options data fetching with caching, rate limiting, and retry."""
+class RateLimiter:
+    """Enforces minimum delay between API calls to avoid rate limiting."""
 
-    def __init__(
-        self,
-        rate_limit_delay: float = 0.3,
-        max_retries: int = 3,
-        use_cache: bool = True,
-    ):
+    def __init__(self, delay: float = 0.3):
         """
-        Initialize the options fetcher.
-
         Args:
-            rate_limit_delay: Seconds to wait between API calls to avoid rate limiting
-            max_retries: Maximum number of retry attempts on failure
-            use_cache: Whether to use disk caching for API responses
+            delay: Minimum seconds between calls
         """
-        self.rate_limit_delay = rate_limit_delay
-        self.max_retries = max_retries
-        self.use_cache = use_cache
+        self.delay = delay
         self._last_request_time = 0.0
-        self._ticker_cache: dict[str, yf.Ticker] = {}
 
-        # Initialize disk cache
-        if use_cache:
-            CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            self._cache = Cache(str(CACHE_DIR))
-        else:
-            self._cache = None
-
-    def _rate_limit(self) -> None:
-        """Enforce rate limiting between API calls."""
+    def wait(self) -> None:
+        """Wait if needed to respect rate limit."""
         elapsed = time.time() - self._last_request_time
-        if elapsed < self.rate_limit_delay:
-            time.sleep(self.rate_limit_delay - elapsed)
+        if elapsed < self.delay:
+            time.sleep(self.delay - elapsed)
         self._last_request_time = time.time()
 
-    def _retry_with_backoff(self, func: Callable[..., T], *args, **kwargs) -> T:
+
+class RetryHandler:
+    """Executes functions with exponential backoff retry on failure."""
+
+    def __init__(self, max_retries: int = 3):
         """
-        Execute a function with exponential backoff retry.
+        Args:
+            max_retries: Maximum number of attempts before giving up
+        """
+        self.max_retries = max_retries
+
+    def execute(self, func: Callable[..., T], *args, **kwargs) -> T:
+        """
+        Execute function with retry logic.
 
         Args:
             func: Function to execute
-            *args: Positional arguments for func
-            **kwargs: Keyword arguments for func
+            *args: Positional arguments
+            **kwargs: Keyword arguments
 
         Returns:
             Result of func
@@ -137,11 +129,39 @@ class OptionsFetcher:
             except Exception as e:
                 last_exception = e
                 if attempt < self.max_retries - 1:
-                    # Exponential backoff: 1s, 2s, 4s...
-                    wait_time = (2 ** attempt)
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s...
                     time.sleep(wait_time)
 
         raise last_exception
+
+
+class OptionsFetcher:
+    """Wrapper for yfinance options data fetching with caching, rate limiting, and retry."""
+
+    def __init__(
+        self,
+        rate_limiter: RateLimiter | None = None,
+        retry_handler: RetryHandler | None = None,
+        use_cache: bool = True,
+    ):
+        """
+        Initialize the options fetcher.
+
+        Args:
+            rate_limiter: Rate limiter instance (created with defaults if not provided)
+            retry_handler: Retry handler instance (created with defaults if not provided)
+            use_cache: Whether to use disk caching for API responses
+        """
+        self._rate_limiter = rate_limiter or RateLimiter()
+        self._retry_handler = retry_handler or RetryHandler()
+        self._ticker_cache: dict[str, yf.Ticker] = {}
+
+        # Initialize disk cache
+        if use_cache:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            self._cache = Cache(str(CACHE_DIR))
+        else:
+            self._cache = None
 
     def _get_ticker(self, symbol: str) -> yf.Ticker:
         """Get a cached ticker object."""
@@ -159,7 +179,7 @@ class OptionsFetcher:
         Returns:
             List of expiration dates as strings (YYYY-MM-DD format)
         """
-        self._rate_limit()
+        self._rate_limiter.wait()
         stock = self._get_ticker(ticker)
         return list(stock.options)
 
@@ -209,7 +229,7 @@ class OptionsFetcher:
             if cached is not None:
                 return cached
 
-        self._rate_limit()
+        self._rate_limiter.wait()
 
         def _fetch():
             stock = self._get_ticker(ticker)
@@ -236,7 +256,7 @@ class OptionsFetcher:
                 stock_price=price,
             )
 
-        result = self._retry_with_backoff(_fetch)
+        result = self._retry_handler.execute(_fetch)
 
         # Cache the result
         if self._cache is not None:
@@ -329,7 +349,7 @@ class OptionsFetcher:
         Returns:
             Current stock price
         """
-        self._rate_limit()
+        self._rate_limiter.wait()
         stock = self._get_ticker(ticker)
         info = stock.info
         return info.get("regularMarketPrice") or info.get("currentPrice", 0.0)
@@ -348,7 +368,7 @@ class OptionsFetcher:
         Returns:
             Polars DataFrame with OHLCV data
         """
-        self._rate_limit()
+        self._rate_limiter.wait()
         stock = self._get_ticker(ticker)
         hist = stock.history(period=period, interval=interval)
 
@@ -502,30 +522,3 @@ class OptionsFetcher:
     def clear_cache(self) -> None:
         """Clear the ticker cache."""
         self._ticker_cache.clear()
-
-
-# Module-level convenience functions
-_default_fetcher: OptionsFetcher | None = None
-
-
-def get_fetcher() -> OptionsFetcher:
-    """Get the default options fetcher instance."""
-    global _default_fetcher
-    if _default_fetcher is None:
-        _default_fetcher = OptionsFetcher()
-    return _default_fetcher
-
-
-def fetch_options_chain(ticker: str, expiration: str) -> OptionsChain:
-    """Convenience function to fetch options chain."""
-    return get_fetcher().fetch_options_chain(ticker, expiration)
-
-
-def get_expirations(ticker: str) -> list[str]:
-    """Convenience function to get expiration dates."""
-    return get_fetcher().get_expirations(ticker)
-
-
-def get_stock_price(ticker: str) -> float:
-    """Convenience function to get stock price."""
-    return get_fetcher().get_stock_price(ticker)

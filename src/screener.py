@@ -14,7 +14,7 @@ from src.config import (
     RESULTS_DIR,
     DASHBOARDS_DIR,
 )
-from src.constants import SCREENING, EXCEL_FORMAT
+from src.constants import SCREENING
 from src.options_fetcher import OptionsFetcher
 from src.spread_calculator import (
     screen_all_spreads,
@@ -23,6 +23,7 @@ from src.spread_calculator import (
 )
 from src.visualizer import create_spread_dashboard, create_top_spreads_table
 from src.alerter import send_alerts
+from src.excel_exporter import export_to_excel
 
 
 class TickerResult(NamedTuple):
@@ -71,162 +72,6 @@ def display_results(spreads: list[CreditSpread], max_display: int = 10) -> None:
 
     if len(spreads) > max_display:
         print(f"\n... and {len(spreads) - max_display} more spreads")
-
-
-def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
-    """
-    Save results to Excel with conditional formatting.
-
-    Args:
-        spreads: List of credit spreads to save
-        timestamp: Timestamp for the screening run
-
-    Returns:
-        Path to saved Excel file
-    """
-    import xlsxwriter
-
-    if not spreads:
-        return ""
-
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    xlsx_filename = RESULTS_DIR / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_spreads.xlsx"
-
-    workbook = xlsxwriter.Workbook(str(xlsx_filename))
-    worksheet = workbook.add_worksheet("Spreads")
-
-    # Define formats
-    header_fmt = workbook.add_format({
-        "bold": True,
-        "bg_color": "#4472C4",
-        "font_color": "white",
-        "border": 1,
-        "align": "center",
-    })
-    money_fmt = workbook.add_format({"num_format": "$#,##0.00", "border": 1})
-    pct_fmt = workbook.add_format({"num_format": "0.0%", "border": 1})
-    num_fmt = workbook.add_format({"num_format": "#,##0", "border": 1})
-    text_fmt = workbook.add_format({"border": 1})
-    date_fmt = workbook.add_format({"num_format": "yyyy-mm-dd", "border": 1})
-
-    # Headers - added POP%, Annualized%, Width
-    headers = [
-        "Ticker", "Type", "Expiration", "DTE", "Width", "Short Strike", "Long Strike",
-        "Credit", "Max Loss", "Max Profit", "ROR %", "Ann %", "POP %", "Break-Even",
-        "Stock Price", "Distance %", "Short OI", "Long OI"
-    ]
-
-    for col, header in enumerate(headers):
-        worksheet.write(0, col, header, header_fmt)
-
-    # Column widths (sized to fit headers)
-    col_widths = [10, 12, 12, 6, 7, 13, 13, 10, 11, 11, 9, 9, 8, 12, 12, 12, 10, 10]
-    for col, width in enumerate(col_widths):
-        worksheet.set_column(col, col, width)
-
-    # Write data
-    for row, spread in enumerate(spreads, start=1):
-        worksheet.write(row, 0, spread.ticker, text_fmt)
-        worksheet.write(row, 1, spread.spread_type.replace("_", " ").title(), text_fmt)
-        worksheet.write(row, 2, spread.expiration, date_fmt)
-        worksheet.write(row, 3, spread.days_to_expiration, num_fmt)
-        worksheet.write(row, 4, spread.width, num_fmt)
-        worksheet.write(row, 5, spread.short_leg.strike, money_fmt)
-        worksheet.write(row, 6, spread.long_leg.strike, money_fmt)
-        worksheet.write(row, 7, spread.net_credit, money_fmt)
-        worksheet.write(row, 8, spread.max_loss, money_fmt)
-        worksheet.write(row, 9, spread.max_profit, money_fmt)
-        worksheet.write(row, 10, spread.return_on_risk / 100, pct_fmt)
-        worksheet.write(row, 11, spread.annualized_return / 100, pct_fmt)
-        worksheet.write(row, 12, spread.probability_of_profit / 100, pct_fmt)
-        worksheet.write(row, 13, spread.break_even, money_fmt)
-        worksheet.write(row, 14, spread.current_stock_price, money_fmt)
-        worksheet.write(row, 15, spread.distance_from_price_pct / 100, pct_fmt)
-        worksheet.write(row, 16, spread.short_leg.open_interest, num_fmt)
-        worksheet.write(row, 17, spread.long_leg.open_interest, num_fmt)
-
-    # Conditional formatting with gradients
-    last_row = len(spreads)
-
-    # ROR % (column K, index 10) - Red to Green gradient (higher is better)
-    worksheet.conditional_format(1, 10, last_row, 10, {
-        "type": "3_color_scale",
-        "min_type": "num",
-        "mid_type": "num",
-        "max_type": "num",
-        "min_value": EXCEL_FORMAT.ROR_MIN,
-        "mid_value": EXCEL_FORMAT.ROR_MID,
-        "max_value": EXCEL_FORMAT.ROR_MAX,
-        "min_color": "#F8696B",  # Red
-        "mid_color": "#FFEB84",  # Yellow
-        "max_color": "#63BE7B",  # Green
-    })
-
-    # Annualized % (column L, index 11) - Red to Green gradient
-    worksheet.conditional_format(1, 11, last_row, 11, {
-        "type": "3_color_scale",
-        "min_type": "num",
-        "mid_type": "num",
-        "max_type": "num",
-        "min_value": EXCEL_FORMAT.ANNUALIZED_MIN,
-        "mid_value": EXCEL_FORMAT.ANNUALIZED_MID,
-        "max_value": EXCEL_FORMAT.ANNUALIZED_MAX,
-        "min_color": "#F8696B",  # Red
-        "mid_color": "#FFEB84",  # Yellow
-        "max_color": "#63BE7B",  # Green
-    })
-
-    # POP % (column M, index 12) - Red to Green gradient (higher is better)
-    worksheet.conditional_format(1, 12, last_row, 12, {
-        "type": "3_color_scale",
-        "min_type": "num",
-        "mid_type": "num",
-        "max_type": "num",
-        "min_value": EXCEL_FORMAT.POP_MIN,
-        "mid_value": EXCEL_FORMAT.POP_MID,
-        "max_value": EXCEL_FORMAT.POP_MAX,
-        "min_color": "#F8696B",  # Red
-        "mid_color": "#FFEB84",  # Yellow
-        "max_color": "#63BE7B",  # Green
-    })
-
-    # DTE (column D, index 3) - Red to Green gradient (more time = better)
-    worksheet.conditional_format(1, 3, last_row, 3, {
-        "type": "3_color_scale",
-        "min_type": "num",
-        "mid_type": "num",
-        "max_type": "num",
-        "min_value": EXCEL_FORMAT.DTE_MIN,
-        "mid_value": EXCEL_FORMAT.DTE_MID,
-        "max_value": EXCEL_FORMAT.DTE_MAX,
-        "min_color": "#F8696B",  # Red (less time)
-        "mid_color": "#FFFFFF",  # White (middle)
-        "max_color": "#63BE7B",  # Green (more time)
-    })
-
-    # Distance % (column P, index 15) - Red to Blue gradient (higher is safer)
-    worksheet.conditional_format(1, 15, last_row, 15, {
-        "type": "3_color_scale",
-        "min_type": "num",
-        "mid_type": "num",
-        "max_type": "num",
-        "min_value": EXCEL_FORMAT.DISTANCE_MIN,
-        "mid_value": EXCEL_FORMAT.DISTANCE_MID,
-        "max_value": EXCEL_FORMAT.DISTANCE_MAX,
-        "min_color": "#F8696B",  # Red (too close)
-        "mid_color": "#FFEB84",  # Yellow
-        "max_color": "#5B9BD5",  # Blue (safe)
-    })
-
-    # Freeze top row
-    worksheet.freeze_panes(1, 0)
-
-    # Auto-filter
-    worksheet.autofilter(0, 0, last_row, len(headers) - 1)
-
-    workbook.close()
-
-    return str(xlsx_filename)
 
 
 def screen_ticker(
@@ -307,6 +152,7 @@ def _screen_ticker_task(
 
 def run_screener(
     config: ScreenerConfig,
+    fetcher: OptionsFetcher | None = None,
     visualize: bool = False,
     alert: bool = False,
     verbose: bool = True,
@@ -317,6 +163,7 @@ def run_screener(
 
     Args:
         config: Screener configuration
+        fetcher: Options data fetcher (created if not provided)
         visualize: Whether to generate visualizations
         alert: Whether to send alerts
         verbose: Whether to print progress
@@ -326,7 +173,7 @@ def run_screener(
         ScreenerResult with all found spreads
     """
     timestamp = datetime.now()
-    fetcher = OptionsFetcher()
+    fetcher = fetcher or OptionsFetcher()
     all_spreads = []
     tickers_with_errors = []
     tickers_skipped_earnings = []
@@ -408,7 +255,7 @@ def run_screener(
         display_results(all_spreads, max_display=10)
 
     # Save results
-    xlsx_path = save_results(all_spreads, timestamp)
+    xlsx_path = export_to_excel(all_spreads, RESULTS_DIR, timestamp)
     if verbose and xlsx_path:
         print(f"\nResults saved to {xlsx_path}")
 
