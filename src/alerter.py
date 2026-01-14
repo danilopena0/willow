@@ -7,6 +7,7 @@ import yfinance as yf
 
 from src.models import CreditSpread, AlertConfig
 from src.config import load_alert_config
+from src.constants import VIX
 
 
 class AlertError(Exception):
@@ -37,11 +38,11 @@ def get_market_context() -> dict:
         vix_price = vix_info.get("regularMarketPrice") or vix_info.get("previousClose", 0)
         context["vix"] = vix_price
 
-        if vix_price < 15:
+        if vix_price < VIX.LOW:
             context["vix_status"] = "Low 😌"
-        elif vix_price < 20:
+        elif vix_price < VIX.NORMAL:
             context["vix_status"] = "Normal"
-        elif vix_price < 30:
+        elif vix_price < VIX.ELEVATED:
             context["vix_status"] = "Elevated ⚠️"
         else:
             context["vix_status"] = "High 🔥"

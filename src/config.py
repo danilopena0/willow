@@ -55,40 +55,6 @@ def load_alert_config() -> AlertConfig:
     )
 
 
-# Default watchlist with common liquid tickers
-DEFAULT_WATCHLIST = [
-    # Major indices ETFs
-    "SPY",   # S&P 500
-    "QQQ",   # Nasdaq 100
-    "IWM",   # Russell 2000
-    "DIA",   # Dow Jones
-
-    # Large cap tech
-    "AAPL",
-    "MSFT",
-    "GOOGL",
-    "AMZN",
-    "META",
-    "NVDA",
-    "TSLA",
-
-    # Semiconductors
-    "AMD",
-    "INTC",
-    "MU",
-
-    # Financials
-    "JPM",
-    "BAC",
-    "GS",
-
-    # Other high-volume tickers
-    "XOM",
-    "WMT",
-    "DIS",
-]
-
-
 # Spread type constants
 SPREAD_TYPE_BULL_PUT = "bull_put"
 SPREAD_TYPE_BEAR_CALL = "bear_call"

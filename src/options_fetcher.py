@@ -3,9 +3,8 @@
 import math
 import time
 from datetime import datetime, date
-from functools import lru_cache
 from pathlib import Path
-from typing import NamedTuple
+from typing import Callable, NamedTuple, TypeVar
 
 import numpy as np
 import polars as pl
@@ -13,6 +12,9 @@ import yfinance as yf
 from diskcache import Cache
 from scipy.stats import norm
 
+
+# Type variable for generic return type
+T = TypeVar('T')
 
 # Default risk-free rate (approximate current US Treasury rate)
 RISK_FREE_RATE = 0.045
@@ -112,7 +114,7 @@ class OptionsFetcher:
             time.sleep(self.rate_limit_delay - elapsed)
         self._last_request_time = time.time()
 
-    def _retry_with_backoff(self, func, *args, **kwargs):
+    def _retry_with_backoff(self, func: Callable[..., T], *args, **kwargs) -> T:
         """
         Execute a function with exponential backoff retry.
 

@@ -6,6 +6,7 @@ import polars as pl
 
 from src.models import CreditSpread, OptionLeg, ScreenerConfig
 from src.config import SPREAD_TYPE_BULL_PUT, SPREAD_TYPE_BEAR_CALL
+from src.constants import SCREENING, QUALITY_WEIGHTS
 
 
 def create_option_leg(row: dict) -> OptionLeg:
@@ -76,10 +77,11 @@ def find_long_leg_strike(
     Returns:
         DataFrame with matching long leg candidates (may be empty)
     """
+    tolerance = SCREENING.STRIKE_WIDTH_TOLERANCE
+
     if spread_type == SPREAD_TYPE_BULL_PUT:
         # Long leg is below short strike for bull put
         target_strike = short_strike - target_width
-        tolerance = 1.0  # Allow $1 tolerance for non-standard strikes
 
         candidates = options.filter(
             (pl.col("strike") >= target_strike - tolerance)
@@ -89,7 +91,6 @@ def find_long_leg_strike(
     else:
         # Long leg is above short strike for bear call
         target_strike = short_strike + target_width
-        tolerance = 1.0
 
         candidates = options.filter(
             (pl.col("strike") >= target_strike - tolerance)
@@ -445,8 +446,13 @@ def rank_spreads(spreads: list[CreditSpread]) -> list[CreditSpread]:
         oi = min(spread.short_leg.open_interest, 10000)
         oi_score = (oi / 10000) ** 0.5  # Square root to compress range
 
-        # Weighted combination (POP is important!)
-        return (ror_score * 0.35) + (pop_score * 0.25) + (distance_pct * 0.25) + (oi_score * 0.15)
+        # Weighted combination
+        return (
+            ror_score * QUALITY_WEIGHTS.ROR
+            + pop_score * QUALITY_WEIGHTS.POP
+            + distance_pct * QUALITY_WEIGHTS.DISTANCE
+            + oi_score * QUALITY_WEIGHTS.OPEN_INTEREST
+        )
 
     return sorted(spreads, key=quality_score, reverse=True)
 

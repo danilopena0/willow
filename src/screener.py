@@ -14,6 +14,7 @@ from src.config import (
     RESULTS_DIR,
     DASHBOARDS_DIR,
 )
+from src.constants import SCREENING, EXCEL_FORMAT
 from src.options_fetcher import OptionsFetcher
 from src.spread_calculator import (
     screen_all_spreads,
@@ -22,10 +23,6 @@ from src.spread_calculator import (
 )
 from src.visualizer import create_spread_dashboard, create_top_spreads_table
 from src.alerter import send_alerts
-
-
-# Maximum parallel workers for fetching tickers
-MAX_WORKERS = 5
 
 
 class TickerResult(NamedTuple):
@@ -157,9 +154,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_type": "num",
         "mid_type": "num",
         "max_type": "num",
-        "min_value": 0.15,
-        "mid_value": 0.25,
-        "max_value": 0.40,
+        "min_value": EXCEL_FORMAT.ROR_MIN,
+        "mid_value": EXCEL_FORMAT.ROR_MID,
+        "max_value": EXCEL_FORMAT.ROR_MAX,
         "min_color": "#F8696B",  # Red
         "mid_color": "#FFEB84",  # Yellow
         "max_color": "#63BE7B",  # Green
@@ -171,9 +168,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_type": "num",
         "mid_type": "num",
         "max_type": "num",
-        "min_value": 1.0,
-        "mid_value": 2.0,
-        "max_value": 4.0,
+        "min_value": EXCEL_FORMAT.ANNUALIZED_MIN,
+        "mid_value": EXCEL_FORMAT.ANNUALIZED_MID,
+        "max_value": EXCEL_FORMAT.ANNUALIZED_MAX,
         "min_color": "#F8696B",  # Red
         "mid_color": "#FFEB84",  # Yellow
         "max_color": "#63BE7B",  # Green
@@ -185,9 +182,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_type": "num",
         "mid_type": "num",
         "max_type": "num",
-        "min_value": 0.60,
-        "mid_value": 0.70,
-        "max_value": 0.80,
+        "min_value": EXCEL_FORMAT.POP_MIN,
+        "mid_value": EXCEL_FORMAT.POP_MID,
+        "max_value": EXCEL_FORMAT.POP_MAX,
         "min_color": "#F8696B",  # Red
         "mid_color": "#FFEB84",  # Yellow
         "max_color": "#63BE7B",  # Green
@@ -199,9 +196,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_type": "num",
         "mid_type": "num",
         "max_type": "num",
-        "min_value": 14,
-        "mid_value": 37,
-        "max_value": 60,
+        "min_value": EXCEL_FORMAT.DTE_MIN,
+        "mid_value": EXCEL_FORMAT.DTE_MID,
+        "max_value": EXCEL_FORMAT.DTE_MAX,
         "min_color": "#F8696B",  # Red (less time)
         "mid_color": "#FFFFFF",  # White (middle)
         "max_color": "#63BE7B",  # Green (more time)
@@ -213,9 +210,9 @@ def save_results(spreads: list[CreditSpread], timestamp: datetime) -> str:
         "min_type": "num",
         "mid_type": "num",
         "max_type": "num",
-        "min_value": 0.01,
-        "mid_value": 0.05,
-        "max_value": 0.10,
+        "min_value": EXCEL_FORMAT.DISTANCE_MIN,
+        "mid_value": EXCEL_FORMAT.DISTANCE_MID,
+        "max_value": EXCEL_FORMAT.DISTANCE_MAX,
         "min_color": "#F8696B",  # Red (too close)
         "mid_color": "#FFEB84",  # Yellow
         "max_color": "#5B9BD5",  # Blue (safe)
@@ -345,13 +342,13 @@ def run_screener(
         if config.earnings_buffer_days > 0:
             print(f"   Earnings filter: Skip if earnings within {config.earnings_buffer_days} days")
         if parallel:
-            print(f"   Mode: Parallel ({MAX_WORKERS} workers)")
+            print(f"   Mode: Parallel ({SCREENING.MAX_PARALLEL_WORKERS} workers)")
         print()
 
     if parallel and len(config.tickers) > 1:
         # Parallel execution with ThreadPoolExecutor
         completed = 0
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        with ThreadPoolExecutor(max_workers=SCREENING.MAX_PARALLEL_WORKERS) as executor:
             # Submit all tasks
             future_to_ticker = {
                 executor.submit(_screen_ticker_task, ticker, config, fetcher): ticker
